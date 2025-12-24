@@ -9,3 +9,5 @@ uv sync --extra cu121
 
 uv tree
 ```
+
+See more info [here](https://docs.astral.sh/uv/) and [here](https://docs.astral.sh/uv/guides/integration/pytorch/#configuring-accelerators-with-optional-dependencies).

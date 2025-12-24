@@ -1,0 +1,290 @@
+import typing
+from typing import Dict, List
+
+import numpy as np
+import torch
+from pycparser.c_ast import Union
+from torch import Tensor
+from vmas import make_env
+from vmas.interactive_rendering import InteractiveEnv
+from vmas.simulator.core import Sphere, World
+from vmas.simulator.scenario import BaseScenario
+from vmas.simulator.utils import Color, ScenarioUtils
+
+from abm.agent import CustomDynamics, ForagingAgent, TargetAgent, compute_gradient, observe, update_belief
+
+if typing.TYPE_CHECKING:
+    from vmas.simulator.rendering import Geom
+
+
+class Scenario(BaseScenario):
+    def __init__(self):
+        super().__init__()
+        self.y_dim = None
+        self.x_dim = None
+        self.initialization_box_ratio = 1
+        self.viewer_zoom = None
+        self.is_interactive = False
+
+        self.action_size = 1
+        self.n_agents = None
+        self.min_dist_between_entities = None
+        self.min_collision_distance = 0.005
+        self.agent_radius = None
+        self.max_speed = 0.05
+        self.agent_collision_penalty = None
+
+        self.n_targets = None
+        self.target_speed = None
+        self.targets_quality_type = None
+        self.target_qualities = None
+
+    def make_world(self, batch_dim: int, device: torch.device, **kwargs):
+        self.is_interactive = kwargs.pop("is_interactive", False)
+
+        # world
+        self.x_dim, self.y_dim = kwargs.pop("x_dim", 10), kwargs.pop("y_dim", 10)
+        self.viewer_zoom = kwargs.pop("viewer_zoom", 1)
+        self.viewer_size = kwargs.pop("viewer_size", (700, 700))
+        self.visualize_semidims = kwargs.pop("visualize_semidims", True)
+        self.min_dist_between_entities = kwargs.pop("min_dist_between_entities", 0.5)
+        self.initialization_box_ratio = kwargs.pop("initialization_box_ratio", 1)
+        self.agent_radius = kwargs.pop("agent_radius", 0.05)
+
+        # target
+        self.n_targets = kwargs.pop("n_targets", 1)
+        self.target_speed = kwargs.pop("target_speed", 1.0)
+
+        # agents
+        self.n_agents = kwargs.pop("n_agents", 5)
+        self.max_speed = kwargs.pop("max_speed", 0.05)
+
+        self.targets_quality_type = kwargs.pop("targets_quality", "HM")
+        if self.targets_quality_type == "HM":
+            self.target_qualities = [1.0 for _ in range(self.n_targets)]
+        elif self.targets_quality_type == "HT":
+            self.target_qualities = np.linspace(0.25, 1.75, self.n_targets).tolist()
+        else:
+            raise ValueError
+
+        self.agent_collision_penalty = kwargs.pop("agent_collision_penalty", 0)
+        ScenarioUtils.check_kwargs_consumed(kwargs)
+
+        # Make world
+        world = World(
+            batch_dim,
+            device,
+            x_semidim=self.x_dim,
+            y_semidim=self.y_dim,
+            collision_force=500,
+            substeps=1,
+            drag=0.25,
+            dt=1,
+            contact_margin=0.01,
+        )
+
+        for i in range(self.n_agents):
+            agent = ForagingAgent(
+                name=f"agent_{i}",
+                collide=False,
+                shape=Sphere(radius=self.agent_radius),
+                action_size=self.action_size,
+                max_speed=self.max_speed,
+                color=Color.BLUE,
+                device=device,
+                dynamics=CustomDynamics(),
+                u_range=3,
+                batch_dim=batch_dim,
+                n_targets=self.n_targets,
+                base_noise=0.1,
+                dist_noise_scale=2.0,
+                process_noise_scale=0.02
+            )
+            world.add_agent(agent)
+
+        for i in range(self.n_targets):
+            target = TargetAgent(
+                name=f"target_{i}",
+                collide=False,
+                shape=Sphere(radius=self.agent_radius * self.target_qualities[i] * 4),
+                color=Color.GRAY,
+                alpha=0.1,
+                render_action=True,
+                max_speed=self.max_speed * self.target_speed,
+                action_script=self.action_script_creator(),
+                action_size=self.action_size,
+                batch_dim=batch_dim,
+                device=device,
+                dynamics=CustomDynamics(),
+                quality=self.target_qualities[i]
+            )
+            world.add_agent(target)
+
+        return world
+
+    def reset_world_at(self, env_index: int = None):
+        ScenarioUtils.spawn_entities_randomly(
+            entities=self.world.agents,
+            world=self.world,
+            env_index=env_index,
+            min_dist_between_entities=self.min_dist_between_entities,
+            x_bounds=(-self.world.x_semidim * self.initialization_box_ratio,
+                      self.world.x_semidim * self.initialization_box_ratio),
+            y_bounds=(-self.world.y_semidim * self.initialization_box_ratio,
+                      self.world.y_semidim * self.initialization_box_ratio),
+        )
+
+    def reward(self, agent: Union(TargetAgent, ForagingAgent)):
+        if "target" in agent.name:
+            return torch.zeros_like(agent.state.pos[:, 0])
+
+        # Avoid collisions with each other
+        if self.agent_collision_penalty != 0:
+            agent.collision_reward[:] = 0
+            for a in self.world.agents:
+                if a != agent:
+                    agent.collision_reward[
+                        self.world.get_distance(a, agent) < self.min_collision_distance
+                        ] += self.agent_collision_penalty
+
+        agent.target_reward[:] = 0
+
+        return agent.target_reward + agent.collision_reward
+
+
+    def info(self, agent: Union(TargetAgent, ForagingAgent)) -> Dict[str, Tensor]:
+        info = {
+            "target_reward": agent.target_reward,
+            "collision_reward": agent.collision_reward
+        }
+        return info
+
+    def observation(self, agent: Union(TargetAgent, ForagingAgent)):
+        if "target" in agent.name:
+            return torch.zeros(1, 2, device=agent.device)
+        return torch.zeros(1, 2, device=agent.device)
+
+    def process_action(self, agent: Union(TargetAgent, ForagingAgent)):
+        if self.is_interactive:
+            # print("random action")
+            # agent.action.u = torch.ones(agent.batch_dim, 1) * 2
+            agent.action.u = torch.distributions.Categorical(probs=torch.ones(3)).sample((agent.batch_dim, 1))
+
+        if "agent" in agent.name:
+            # get observation based on the selected information channel (agent.action.u[:, 0])
+            observe(agent, self.world)
+            update_belief(agent, self.target_speed)
+            compute_gradient(agent)
+        else:
+            agent.update_state_based_on_action(agent, self.world)
+
+
+    def action_script_creator(self):
+        action_dim = self.action_size
+        def action_script(agent, world):
+            agent.action.u = torch.zeros((agent.batch_dim, action_dim))
+        return action_script
+
+    def extra_render(self, env_index: int = 0) -> "List[Geom]":
+        from vmas.simulator import rendering
+        geoms: List[Geom] = []
+        # add velocity vectors
+        for agent in self.world.agents:
+            norm_vel = agent.state.vel / torch.linalg.norm(agent.state.vel, dim=-1).unsqueeze(1)
+            line = rendering.Line(
+                agent.state.pos[env_index],
+                agent.state.pos[env_index] + norm_vel[env_index] * self.agent_radius,
+                width=1,
+                )
+            xform = rendering.Transform()
+            line.add_attr(xform)
+            line.set_color(*Color.BLACK.value)
+            geoms.append(line)
+
+            if "agent" not in agent.name: continue
+            # Visualize Belief State (Covariance Ellipses) ---
+            # Iterate over all targets in the belief
+
+            # Check if beliefs are initialized (prevent rendering at 0,0 initially if not ready)
+            if torch.all(agent.belief_target_covariance[env_index] == 0):
+                continue
+
+            means = agent.belief_target_pos[env_index]      # (n_targets, 2)
+            covs = agent.belief_target_covariance[env_index] # (n_targets, 2, 2)
+
+            for k in range(agent.n_targets):
+                mean = means[k]
+                cov = covs[k]
+
+                # Eigen decomposition to find ellipse orientation and axes
+                # We use torch.linalg.eigh for symmetric matrices
+                try:
+                    eigvals, eigvecs = torch.linalg.eigh(cov)
+
+                    # Ensure eigenvalues are positive (numerical stability)
+                    eigvals = torch.clamp(eigvals, min=1e-6)
+
+                    # Scale factors: 2 std deviations (approx 95% confidence interval)
+                    # make_circle creates radius 1, so we scale by sqrt(eigval)*2
+                    scale_x = torch.sqrt(eigvals[0]) * 2
+                    scale_y = torch.sqrt(eigvals[1]) * 2
+
+                    # Rotation angle: arctan of the first eigenvector
+                    # Note: eigvecs columns are the eigenvectors
+                    angle = torch.atan2(eigvecs[1, 0], eigvecs[0, 0])
+
+                    # Create the ellipse
+                    ellipse = rendering.make_circle(radius=1.0, res=20)
+
+                    # Apply transforms
+                    xform = rendering.Transform()
+                    xform.set_scale(scale_x, scale_y)
+                    xform.set_rotation(angle)
+                    xform.set_translation(mean[0], mean[1])
+                    ellipse.add_attr(xform)
+
+                    # Set Color (Green, semi-transparent)
+                    ellipse.set_color(0.0, 1.0, 0.0, alpha=0.2)
+
+                    geoms.append(ellipse)
+                except Exception:
+                    # Skip rendering this ellipse if math fails (e.g. singular matrix)
+                    pass
+
+        return geoms
+
+
+if __name__ == "__main__":
+    scenario = Scenario()
+    control_two_agents = False
+    display_info = False
+    save_render = True # True
+
+    InteractiveEnv(
+        make_env(
+            scenario=scenario,
+            num_envs=1,
+            device="cpu",
+            wrapper="gym",
+            seed=0,
+            wrapper_kwargs={"return_numpy": False},
+            x_dim=1,
+            y_dim=1,
+            target_speed=0.5,
+            n_agents=1,
+            n_targets=3,
+            targets_quality = 'HT',
+            is_interactive=True,
+            initialization_box_ratio=0.8,
+            viewer_zoom=1.05,
+            viewer_size = (600, 600),
+            visualize_semidims=True,
+            min_dist_between_entities=0.1,
+            agent_radius=0.01,
+            max_speed=0.05
+        ),
+        control_two_agents=control_two_agents,
+        display_info=display_info,
+        save_render=save_render,
+        render_name=f"{scenario}_interactive" if isinstance(scenario, str) else "interactive",
+    )
