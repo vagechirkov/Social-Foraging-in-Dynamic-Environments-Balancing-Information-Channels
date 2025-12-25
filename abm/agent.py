@@ -343,67 +343,40 @@ def compute_reward(agent: ForagingAgent, world):
 
 
 class TargetAgent(Agent):
-    def __init__(self, batch_dim, device, quality=1.0, *args, **kwargs):
+    def __init__(self, batch_dim, device, quality=1.0, persistence=20, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.current_step_remaining_time = torch.zeros(batch_dim, device=device)
         self.quality = torch.ones(batch_dim, device=device) * quality
+        # converted to radians
+        self.persistence_sigma = persistence * (torch.pi / 180.0)
+        # Heading alpha for correlated random walk
+        self.heading = torch.zeros(batch_dim, device=device)
+        self.reset_heading(batch_dim, device)
+
+    def reset_heading(self, batch_dim, device):
+        # Initialize random heading [0, 2pi]
+        self.heading = torch.rand(batch_dim, device=device) * 2 * torch.pi
 
     def update_state_based_on_action(self, t: Agent, world):
-        rotation_angle = torch.atan2(t.state.vel[:, Y], t.state.vel[:, X])
-        rotation_angle = self.levy_walk(t, rotation_angle, dt=world.dt)
+        """
+        Correlated Random Walk (CRW)
+        x(t+1) = x(t) + d(t)
+        alpha(t) = alpha(t-1) + N(0, sigma^2)
+        """
+        # 1. Update Heading
+        self.heading += torch.randn(t.batch_dim, device=t.device) * self.persistence_sigma
 
-        update_velocity(t, rotation_angle, x_semidim=world.x_semidim - t.shape.radius)
+        # 2. Update Velocity Vector based on Heading
+        # v_x = v * cos(alpha), v_y = v * sin(alpha)
+        # speed is constant t.max_speed
+        t.state.vel[:, X] = torch.cos(self.heading) * t.max_speed
+        t.state.vel[:, Y] = torch.sin(self.heading) * t.max_speed
 
-        # normalize velocity
-        t.state.vel *= t.max_speed
-
-        # normalize velocity
-        t.state.vel /= torch.linalg.norm(t.state.vel, dim=-1).unsqueeze(1)
-
-    def levy_walk(self, t: Agent, rotation_angle, dt):
-        """ Lévy flight behavior for the target."""
-        rotation_angle = torch.where(
-            t.current_step_remaining_time <= 0,
-            torch.rand_like(rotation_angle) * 2 * torch.pi - torch.pi,
-            rotation_angle,
-            )
-
-        t.current_step_remaining_time = torch.where(
-            t.current_step_remaining_time <= 0,
-            sample_pareto_limited(1, t.batch_dim, max_value=100, device=t.device) * dt,
-            t.current_step_remaining_time - dt,
-            )
-        return rotation_angle
-
-
-def update_velocity(_agent, rotation_angle, x_semidim):
-    # update velocity based on the new angle
-    _agent.state.vel[:, X] = torch.cos(rotation_angle)
-    _agent.state.vel[:, Y] = torch.sin(rotation_angle)
-
-    # bounce off walls
-    if torch.any(torch.abs(_agent.state.pos) > x_semidim):
-        _agent.state.vel = -_agent.state.pos
-
-
-def sample_pareto_limited(a, batch_size, device, max_value=100):
-    """
-    Generate a single sample from a Pareto distribution, shift it by 1,
-    and limit it to a maximum value.
-
-    Parameters:
-    - a: Shape parameter of the Pareto distribution.
-    - max_value: Maximum value to clip the result (default=100).
-
-    Returns:
-    - A single float value following the described behavior.
-    """
-    # Sample from the Pareto distribution using the inverse CDF method
-    u = torch.rand(batch_size, device=device)  # Uniform random number in [0, 1)
-    pareto_sample = (1 / (1 - u)) ** (1 / a) - 1  # Pareto sample
-
-    # Shift by 1 and apply the max limit
-    return torch.min(pareto_sample + 1, torch.tensor(max_value))
+        # 3. Bounce off walls
+        for dim, semidim in zip([X, Y], [world.x_semidim, world.y_semidim]):
+            hit_mask = torch.abs(t.state.pos[:, dim]) > (semidim - t.shape.radius)
+            if torch.any(hit_mask):
+                t.state.vel[hit_mask, dim] *= -1
+                self.heading[hit_mask] = torch.atan2(t.state.vel[hit_mask, Y], t.state.vel[hit_mask, X])
 
 
 class CustomDynamics(Dynamics):
