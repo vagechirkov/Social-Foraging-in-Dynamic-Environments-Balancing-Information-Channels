@@ -3,18 +3,26 @@ from typing import Dict, List
 
 import numpy as np
 import torch
-from pycparser.c_ast import Union
 from torch import Tensor
 from vmas import make_env
 from vmas.interactive_rendering import InteractiveEnv
-from vmas.simulator.core import Sphere, World
+from vmas.simulator.core import Agent, Sphere, World
 from vmas.simulator.scenario import BaseScenario
 from vmas.simulator.utils import Color, ScenarioUtils
 
-from abm.agent import CustomDynamics, ForagingAgent, TargetAgent, compute_gradient, observe, update_belief
+from abm.agent import CustomDynamics, ForagingAgent, TargetAgent, add_process_noise_to_belief, compute_gradient, \
+    observe, update_belief
 
 if typing.TYPE_CHECKING:
     from vmas.simulator.rendering import Geom
+
+STATE_COLOR_MAP = {
+    0: (0, 0.6196078431372549, 0.45098039215686275),  # private #009E73
+    1: (0.33725490196078434, 0.7058823529411765, 0.9137254901960784),  # social #56B4E9
+    2: (0.33725490196078434, 0.7058823529411765, 0.9137254901960784),  # social #56B4E9
+    3: (0.33725490196078434, 0.7058823529411765, 0.9137254901960784),  # social #56B4E9
+    4: (0.9019607843137255, 0.6235294117647059, 0),  # none #E69F00
+}
 
 
 class Scenario(BaseScenario):
@@ -134,7 +142,7 @@ class Scenario(BaseScenario):
                       self.world.y_semidim * self.initialization_box_ratio),
         )
 
-    def reward(self, agent: Union(TargetAgent, ForagingAgent)):
+    def reward(self, agent: Agent):
         if "target" in agent.name:
             return torch.zeros_like(agent.state.pos[:, 0])
 
@@ -152,30 +160,35 @@ class Scenario(BaseScenario):
         return agent.target_reward + agent.collision_reward
 
 
-    def info(self, agent: Union(TargetAgent, ForagingAgent)) -> Dict[str, Tensor]:
+    def info(self, agent: Agent) -> Dict[str, Tensor]:
         info = {
             "target_reward": agent.target_reward,
             "collision_reward": agent.collision_reward
         }
         return info
 
-    def observation(self, agent: Union(TargetAgent, ForagingAgent)):
+    def observation(self, agent: Agent):
         if "target" in agent.name:
             return torch.zeros(1, 2, device=agent.device)
         return torch.zeros(1, 2, device=agent.device)
 
-    def process_action(self, agent: Union(TargetAgent, ForagingAgent)):
+    def process_action(self, agent: Agent):
         if self.is_interactive:
-            # print("random action")
-            # agent.action.u = torch.ones(agent.batch_dim, 1) * 2
-            agent.action.u = torch.distributions.Categorical(probs=torch.ones(3)).sample((agent.batch_dim, 1))
+            probs = torch.zeros(5)
+            probs[0] = 0.5
+            probs[4] = 0.5
+            agent.action.u = torch.distributions.Categorical(probs=probs).sample((agent.batch_dim, 1))
 
-        if "agent" in agent.name:
+        if "agent" in agent.name and isinstance(agent, ForagingAgent):
             # get observation based on the selected information channel (agent.action.u[:, 0])
-            observe(agent, self.world)
-            update_belief(agent, self.target_speed)
+            targets = [a for a in self.world.agents if "target" in a.name]
+            other_agents = [a for a in self.world.agents if a != agent and "target" not in a.name]
+
+            observe(agent, targets, other_agents)
+            add_process_noise_to_belief(agent, self.target_speed)
+            update_belief(agent)
             compute_gradient(agent)
-        else:
+        elif isinstance(agent, TargetAgent):
             agent.update_state_based_on_action(agent, self.world)
 
 
@@ -226,8 +239,9 @@ class Scenario(BaseScenario):
 
                     # Scale factors: 2 std deviations (approx 95% confidence interval)
                     # make_circle creates radius 1, so we scale by sqrt(eigval)*2
-                    scale_x = torch.sqrt(eigvals[0]) * 2
-                    scale_y = torch.sqrt(eigvals[1]) * 2
+                    std = 2  # 1
+                    scale_x = torch.sqrt(eigvals[0]) * std
+                    scale_y = torch.sqrt(eigvals[1]) * std
 
                     # Rotation angle: arctan of the first eigenvector
                     # Note: eigvecs columns are the eigenvectors
@@ -244,12 +258,15 @@ class Scenario(BaseScenario):
                     ellipse.add_attr(xform)
 
                     # Set Color (Green, semi-transparent)
-                    ellipse.set_color(0.0, 1.0, 0.0, alpha=0.2)
+                    ellipse.set_color(0.0, 1.0, 0.0, alpha=0.05)
 
                     geoms.append(ellipse)
                 except Exception:
                     # Skip rendering this ellipse if math fails (e.g. singular matrix)
                     pass
+
+            if isinstance(agent, ForagingAgent) and agent.action.u is not None:
+                agent.color = STATE_COLOR_MAP[int(agent.action.u[env_index, 0].item())]
 
         return geoms
 
@@ -270,7 +287,7 @@ if __name__ == "__main__":
             wrapper_kwargs={"return_numpy": False},
             x_dim=1,
             y_dim=1,
-            target_speed=0.5,
+            target_speed=0.2,
             n_agents=1,
             n_targets=3,
             targets_quality = 'HT',

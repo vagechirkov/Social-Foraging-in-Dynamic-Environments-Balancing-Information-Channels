@@ -1,3 +1,6 @@
+from functools import partial
+from typing import List
+
 import torch
 from vmas.simulator.core import Agent
 from vmas.simulator.dynamics.common import Dynamics
@@ -57,25 +60,34 @@ class AgentObservations:
     """Namespace for stateless observation strategies."""
 
     @staticmethod
-    def private(agent, targets):
+    def private(agent, targets, indices=None):
         """
         Implements Private Sensing (Z_priv).
         The agent scans the environment and receives noisy estimates for all resources.
         Noise scales with distance.
         """
-        batch_dim = agent.batch_dim
         device = agent.device
 
-        target_pos = torch.zeros_like(agent.belief_target_pos)
-        target_covariance = torch.zeros_like(agent.belief_target_covariance)
-        target_qual = torch.zeros_like(agent.belief_target_qual)
-        target_qual_var = torch.zeros_like(agent.belief_target_qual_var)
+        if indices is None:
+            batch_dim = agent.batch_dim
+            agent_pos = agent.state.pos
+        else:
+            batch_dim = len(indices)
+            agent_pos = agent.state.pos[indices]
+
+        target_pos = torch.zeros(batch_dim, len(targets), 2, device=device)
+        target_covariance = torch.zeros(batch_dim, len(targets), 2, 2, device=device)
+        target_qual = torch.zeros(batch_dim, len(targets), device=device)
+        target_qual_var = torch.zeros(batch_dim, len(targets), device=device)
 
         for i, t in enumerate(targets):
+            # Slice target data if indices are provided
+            t_pos = t.state.pos if indices is None else t.state.pos[indices]
+
             # 1. Calculate Euclidean distance to target d_{ik}
             # agent.state.pos: (batch, 2)
             # t.state.pos: (batch, 2)
-            diff = agent.state.pos - t.state.pos
+            diff = agent_pos - t_pos
             dist = torch.norm(diff, dim=1)  # (batch,)
 
             # 2. Determine variances based on distance
@@ -98,12 +110,15 @@ class AgentObservations:
 
             # 4. Sample target position z_{i,k} ~ N(x_k, Sigma_{obs})
             noise_pos = torch.randn(batch_dim, 2, device=device) * sigma_priv.unsqueeze(1)
-            target_pos[:, i, :] = t.state.pos + noise_pos
+            target_pos[:, i, :] = t_pos + noise_pos
 
             # 5. Sample target quality o_{q,k} ~ N(q_k, sigma_qual^2)
             true_quality = getattr(t, 'quality', torch.ones(batch_dim, device=device))
+            # Assuming t.quality is (batch_dim,)
+            t_qual = true_quality if indices is None else true_quality[indices]
+
             noise_qual = torch.randn(batch_dim, device=device) * sigma_qual
-            target_qual[:, i] = true_quality + noise_qual
+            target_qual[:, i] = t_qual + noise_qual
             target_qual_var[:, i] = var_qual
 
         return target_pos, target_covariance, target_qual, target_qual_var
@@ -133,39 +148,42 @@ class AgentObservations:
     ...
 
 
-def observe(agent: ForagingAgent, world):
+def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: List[Agent]):
     """
-    Collects observations for the agent.
+    Collects observations based on agent.action.u[:, 0].
+    Channels: 0: Priv, 1: Belief, 2: Heading, 3: Pos, 4: None
     """
-    # n_agents,
-    # random_other_agent_ind = torch.randint(n_agents, (agent.batch_dim,))
-    # other_agents = [a for a in world.agents if a != agent and "target" not in a.name]
-    #
-    # candidates_pos = torch.stack([
-    #     AgentObservations.private(agent, targets),
-    #     AgentObservations.others_belief(agent, other_agents, random_other_agent_ind),
-    #     AgentObservations.others_heading(agent, other_agents, random_other_agent_ind),
-    #     AgentObservations.others_location(agent, other_agents, random_other_agent_ind),
-    # ], dim=1)
+    channel_indices = agent.action.u[:, 0].long()
 
-    # selected observation for each agent in the batch
-    # agent.action.u[:, 0]
+    if len(other_agents) != 0:
+        random_other_agent_ind = torch.randint(len(other_agents), (agent.batch_dim,))
+    else:
+        random_other_agent_ind = torch.zeros(agent.batch_dim).long()
 
-    targets = [a for a in world.agents if "target" in a.name]
-    pos, covariance, quality, quality_var = AgentObservations.private(agent, targets)
+    # Channel 4: None (observations remain the same; belief is not updated).
+    channel_observation_functions = {
+        0: partial(AgentObservations.private, targets=targets),
+        1: partial(AgentObservations.others_belief, other_agents=other_agents,
+                   other_agent_mask=random_other_agent_ind),
+        2: partial(AgentObservations.others_heading, other_agents=other_agents,
+                   other_agent_mask=random_other_agent_ind),
+        3: partial(AgentObservations.others_location, other_agents=other_agents,
+                   other_agent_mask=random_other_agent_ind)
+    }
 
-    agent.obs_target_pos = pos
-    agent.obs_target_covariance = covariance
-    agent.obs_target_qual = quality
-    agent.obs_target_qual_var = quality_var
+    for ch_idx, obs_func in channel_observation_functions.items():
+        mask = (channel_indices == ch_idx)
+        if mask.any():
+            indices = torch.nonzero(mask).flatten()
+            p, c, q, qv = obs_func(agent, indices=indices)
+
+            agent.obs_target_pos[indices] = p
+            agent.obs_target_covariance[indices] = c
+            agent.obs_target_qual[indices] = q
+            agent.obs_target_qual_var[indices] = qv
 
 
-def update_belief(agent: ForagingAgent, target_speed):
-    """
-    Updates the internal GMM belief state using Kalman Filters for both
-    spatial (vector) and quality (scalar) components.
-    """
-    # PREDICTION STEP (Add Noise)
+def add_process_noise_to_belief(agent: ForagingAgent, target_speed):
     # This prevents the covariance from collapsing to zero and allows tracking moving targets
     Q_scale = agent.process_noise_scale * (target_speed / 0.1)
     Q = torch.eye(2, device=agent.device).view(1, 1, 2, 2).expand_as(agent.belief_target_covariance) * (Q_scale ** 2)
@@ -176,15 +194,29 @@ def update_belief(agent: ForagingAgent, target_speed):
     # Also add process noise to quality variance (assuming quality might drift slightly)
     # agent.belief_target_qual_var = agent.belief_target_qual_var + (Q_scale ** 2)
 
-    # SPATIAL UPDATE
+
+def update_belief(agent: ForagingAgent):
+    """
+    Updates the internal GMM belief state using Kalman Filters for both
+    spatial (vector) and quality (scalar) components.
+    """
+    # 1. Identify agents to update
+    # Channels: 0: Private, 1: Belief, 2: Heading, 3: Pos, 4: None
+    update_mask = (agent.action.u[:, 0].long() != 4)
+    update_indices = torch.nonzero(update_mask).flatten()
+
+    if update_indices.numel() == 0:
+        return
+
+    # TARGET POSITION UPDATE
     # Sigma_t: (batch, n_targets, 2, 2)
-    sigma_t = agent.belief_target_covariance
+    sigma_t = agent.belief_target_covariance[update_indices]
     # R_k (Sigma_obs): (batch, n_targets, 2, 2)
-    R_k = agent.obs_target_covariance
+    R_k = agent.obs_target_covariance[update_indices]
     # mu_t: (batch, n_targets, 2)
-    mu_t = agent.belief_target_pos
+    mu_t = agent.belief_target_pos[update_indices]
     # z_k: (batch, n_targets, 2)
-    z_k = agent.obs_target_pos
+    z_k = agent.obs_target_pos[update_indices]
 
     # 1. Kalman Gain Calculation
     # Innovation Covariance S = Sigma_t + R_k
@@ -206,22 +238,22 @@ def update_belief(agent: ForagingAgent, target_speed):
     # correction = K * y
     correction = torch.matmul(K, y).squeeze(-1)
 
-    agent.belief_target_pos = mu_t + correction
+    agent.belief_target_pos[update_indices] = mu_t + correction
 
     # 3. Update Covariance
     # Sigma_{t+1} = (I - K) * Sigma_t
     I = torch.eye(2, device=agent.device).view(1, 1, 2, 2).expand_as(K)
-    agent.belief_target_covariance = torch.matmul(I - K, sigma_t)
+    agent.belief_target_covariance[update_indices] = torch.matmul(I - K, sigma_t)
 
     # QUALITY UPDATE
     # sigma^2_{q, i, k} (batch, n_targets)
-    sigma_q_t = agent.belief_target_qual_var
+    sigma_q_t = agent.belief_target_qual_var[update_indices]
     # R_{q,k} (batch, n_targets)
-    R_q_k = agent.obs_target_qual_var
+    R_q_k = agent.obs_target_qual_var[update_indices]
     # q_t (batch, n_targets)
-    q_t = agent.belief_target_qual
+    q_t = agent.belief_target_qual[update_indices]
     # o_{q,k} (batch, n_targets)
-    o_q = agent.obs_target_qual
+    o_q = agent.obs_target_qual[update_indices]
 
     # 1. Kalman Gain Calculation
     # K_{q,k} = sigma^2_t / (sigma^2_t + R_{q,k})
@@ -229,11 +261,11 @@ def update_belief(agent: ForagingAgent, target_speed):
 
     # 2. Update Mean
     # q_{t+1} = q_t + K_q * (o_q - q_t)
-    agent.belief_target_qual = q_t + K_q * (o_q - q_t)
+    agent.belief_target_qual[update_indices] = q_t + K_q * (o_q - q_t)
 
     # 3. Update Variance
     # sigma^2_{t+1} = (1 - K_q) * sigma^2_t
-    agent.belief_target_qual_var = (1 - K_q) * sigma_q_t
+    agent.belief_target_qual_var[update_indices] = (1 - K_q) * sigma_q_t
 
 
 def compute_gradient(agent: ForagingAgent):
@@ -300,7 +332,7 @@ def compute_gradient(agent: ForagingAgent):
 
     # Set agent's velocity
     # v_i(t) = v_max * (grad / ||grad||)
-    alpha = 0.8
+    alpha = 0.9
     # v_new = alpha * v_old + (1 - alpha) * v_target
     agent.state.vel = alpha * agent.state.vel + (1 - alpha) * direction * agent.max_speed
 
