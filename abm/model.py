@@ -95,7 +95,7 @@ class Scenario(BaseScenario):
             agent = ForagingAgent(
                 name=f"agent_{i}",
                 collide=False,
-                shape=Sphere(radius=self.agent_radius),
+                shape=Sphere(radius=self.agent_radius * 2 if i == 0 and self.is_interactive else self.agent_radius),
                 action_size=self.action_size,
                 max_speed=self.max_speed,
                 color=Color.BLUE,
@@ -206,25 +206,29 @@ class Scenario(BaseScenario):
         belief_visualized = False
         # add velocity vectors
         for agent in self.world.agents:
-            norm_vel = agent.state.vel / torch.linalg.norm(agent.state.vel, dim=-1).unsqueeze(1)
-            line = rendering.Line(
-                agent.state.pos[env_index],
-                agent.state.pos[env_index] + norm_vel[env_index] * self.agent_radius,
-                width=1,
-                )
-            xform = rendering.Transform()
-            line.add_attr(xform)
-            line.set_color(*Color.BLACK.value)
-            geoms.append(line)
+            if ("agent" in agent.name) and (not belief_visualized):
+                self.visualize_belief(agent, env_index, geoms)
+                belief_visualized = True
+
+            self.draw_agent_velocity(agent, env_index, geoms, color=Color.BLACK, width=1)
 
             if isinstance(agent, ForagingAgent) and agent.action.u is not None:
                 agent.color = STATE_COLOR_MAP[int(agent.action.u[env_index, 0].item())]
 
-            if "agent" in agent.name and not belief_visualized:
-                self.visualize_belief(agent, env_index, geoms)
-                belief_visualized = True
-
         return geoms
+
+    def draw_agent_velocity(self, agent, env_index: int, geoms, color, width=1):
+        from vmas.simulator import rendering
+        norm_vel = agent.state.vel / torch.linalg.norm(agent.state.vel, dim=-1).unsqueeze(1)
+        line = rendering.Line(
+            agent.state.pos[env_index],
+            agent.state.pos[env_index] + norm_vel[env_index] * self.agent_radius,
+            width=width,
+        )
+        xform = rendering.Transform()
+        line.add_attr(xform)
+        line.set_color(*color.value)
+        geoms.append(line)
 
     def visualize_belief(self, agent, env_index: int, geoms):
         from vmas.simulator import rendering
@@ -265,8 +269,8 @@ class Scenario(BaseScenario):
                 xform.set_translation(mean[0], mean[1])
                 ellipse.add_attr(xform)
 
-                # Set Color (Green, semi-transparent)
-                ellipse.set_color(0.0, 1.0, 0.0, alpha=0.05)
+                # Set Color (Gray, semi-transparent)
+                ellipse.set_color(*Color.GRAY.value, alpha=0.05)
 
                 geoms.append(ellipse)
             except Exception:
