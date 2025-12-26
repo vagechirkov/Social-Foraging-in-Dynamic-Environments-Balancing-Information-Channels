@@ -124,28 +124,95 @@ class AgentObservations:
         return target_pos, target_covariance, target_qual, target_qual_var
 
     @staticmethod
-    def others_belief(agent, other_agents, other_agent_mask):
-        others_belief = torch.zeros_like(agent.belief_target_pos)
+    def others_belief(agent, n_targets, other_agents, other_agent_mask, indices=None):
+        """
+        Observes the full belief state of a selected neighbor.
+        Z_belief = { (mu_j + noise, q_j + noise) }
+        """
+        device = agent.device
+        if indices is None:
+            batch_dim = agent.batch_dim
+        else:
+            batch_dim = len(indices)
 
-        for i, other_agent in enumerate(other_agents):
-            others_belief = torch.where(
-                other_agent_mask == i,
-                other_agent.belief_target_pos,
-                others_belief
-            )
+        # 1. Gather neighbor data specifically for the active indices
+        # Shape: (batch, n_neighbors, ...)
 
-        return others_belief
-    ...
+        # Stack all neighbors' positions: (batch, n_neighbors, 2)
+        all_neighbors_pos = torch.stack([a.state.pos[indices] for a in other_agents], dim=1)
+
+        # Stack all neighbors' belief means: (batch, n_neighbors, n_targets, 2)
+        all_neighbors_belief_pos = torch.stack([a.belief_target_pos[indices] for a in other_agents], dim=1)
+
+        # Stack all neighbors' belief covs: (batch, n_neighbors, n_targets, 2, 2)
+        all_neighbors_belief_cov = torch.stack([a.belief_target_covariance[indices] for a in other_agents], dim=1)
+
+        # Stack all neighbors' quality estimates: (batch, n_neighbors, n_targets)
+        all_neighbors_belief_qual = torch.stack([a.belief_target_qual[indices] for a in other_agents], dim=1)
+
+        # 2. Select the specific neighbor j using other_agent_mask
+        # mask is (batch,), need to slice it by indices first
+        batch_mask = other_agent_mask[indices] # (batch_subset,)
+
+        # Expand mask for gathering
+        # For pos: (batch, 1, 2)
+        idx_pos = batch_mask.view(batch_dim, 1, 1).expand(-1, 1, 2)
+        neighbor_pos = torch.gather(all_neighbors_pos, 1, idx_pos).squeeze(1) # (batch, 2)
+
+        # For belief pos: (batch, 1, n_targets, 2)
+        idx_belief_pos = batch_mask.view(batch_dim, 1, 1, 1).expand(-1, 1, n_targets, 2)
+        neighbor_belief_pos = torch.gather(all_neighbors_belief_pos, 1, idx_belief_pos).squeeze(1)
+
+        # For belief cov: (batch, 1, n_targets, 2, 2)
+        idx_belief_cov = batch_mask.view(batch_dim, 1, 1, 1, 1).expand(-1, 1, n_targets, 2, 2)
+        neighbor_belief_cov = torch.gather(all_neighbors_belief_cov, 1, idx_belief_cov).squeeze(1)
+
+        # For belief qual: (batch, 1, n_targets)
+        idx_belief_qual = batch_mask.view(batch_dim, 1, 1).expand(-1, 1, n_targets)
+        neighbor_belief_qual = torch.gather(all_neighbors_belief_qual, 1, idx_belief_qual).squeeze(1)
+
+        # 3. Calculate Transmission Noise based on distance d_ij
+        # agent.state.pos[indices]: (batch, 2)
+        d_ij = torch.norm(agent.state.pos[indices] - neighbor_pos, dim=1) # (batch,)
+
+        # Sigma_trans(d_ij)
+        sigma_trans = agent.base_noise + agent.dist_noise_scale * d_ij
+        var_trans = sigma_trans ** 2 # (batch,)
+
+        # 4. Construct Observations
+
+        # Position Observation: z ~ N(mu_j, Sigma_obs)
+        # Sigma_obs = Sigma_j + sigma_trans^2 * I
+
+        # Create noise covariance matrix (batch, 1, 2, 2) expanded to targets
+        noise_cov = torch.zeros(batch_dim, 2, 2, device=device)
+        noise_cov[:, 0, 0] = var_trans
+        noise_cov[:, 1, 1] = var_trans
+        noise_cov = noise_cov.unsqueeze(1).expand(-1, n_targets, -1, -1) # (batch, n_targets, 2, 2)
+
+        # R_k = Sigma_j + Noise_Cov
+        target_covariance = neighbor_belief_cov + noise_cov
+
+        # Sample position noise
+        pos_noise = torch.randn(batch_dim, n_targets, 2, device=device) * sigma_trans.view(batch_dim, 1, 1)
+        target_pos = neighbor_belief_pos + pos_noise
+
+        # Quality Observation: o_q ~ N(q_j, sigma_trans^2)
+        qual_noise = torch.randn(batch_dim, n_targets, device=device) * sigma_trans.unsqueeze(1)
+        target_qual = neighbor_belief_qual + qual_noise
+
+        # Quality Variance R_q
+        target_qual_var = var_trans.unsqueeze(1).expand(-1, n_targets)
+
+        return target_pos, target_covariance, target_qual, target_qual_var
 
     @staticmethod
-    def others_heading(agent, other_agents, other_agent_mask):
+    def others_heading(agent, other_agents, other_agent_mask, indices=None):
         ...
-    ...
 
     @staticmethod
-    def others_location(agent, other_agents, other_agent_mask):
+    def others_location(agent, other_agents, other_agent_mask, indices=None):
         ...
-    ...
 
 
 def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: List[Agent]):
@@ -163,7 +230,7 @@ def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: Li
     # Channel 4: None (observations remain the same; belief is not updated).
     channel_observation_functions = {
         0: partial(AgentObservations.private, targets=targets),
-        1: partial(AgentObservations.others_belief, other_agents=other_agents,
+        1: partial(AgentObservations.others_belief, n_targets=len(targets), other_agents=other_agents,
                    other_agent_mask=random_other_agent_ind),
         2: partial(AgentObservations.others_heading, other_agents=other_agents,
                    other_agent_mask=random_other_agent_ind),

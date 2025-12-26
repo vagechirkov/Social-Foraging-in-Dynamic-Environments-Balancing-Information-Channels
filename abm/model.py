@@ -175,7 +175,8 @@ class Scenario(BaseScenario):
     def process_action(self, agent: Agent):
         if self.is_interactive:
             probs = torch.zeros(5)
-            probs[0] = 0.5
+            probs[0] = 0.2 # Private
+            probs[1] = 0.3 # Belief
             probs[4] = 0.5
             agent.action.u = torch.distributions.Categorical(probs=probs).sample((agent.batch_dim, 1))
 
@@ -201,6 +202,8 @@ class Scenario(BaseScenario):
     def extra_render(self, env_index: int = 0) -> "List[Geom]":
         from vmas.simulator import rendering
         geoms: List[Geom] = []
+
+        belief_visualized = False
         # add velocity vectors
         for agent in self.world.agents:
             norm_vel = agent.state.vel / torch.linalg.norm(agent.state.vel, dim=-1).unsqueeze(1)
@@ -214,61 +217,61 @@ class Scenario(BaseScenario):
             line.set_color(*Color.BLACK.value)
             geoms.append(line)
 
-            if "agent" not in agent.name: continue
-            # Visualize Belief State (Covariance Ellipses) ---
-            # Iterate over all targets in the belief
-
-            # Check if beliefs are initialized (prevent rendering at 0,0 initially if not ready)
-            if torch.all(agent.belief_target_covariance[env_index] == 0):
-                continue
-
-            means = agent.belief_target_pos[env_index]      # (n_targets, 2)
-            covs = agent.belief_target_covariance[env_index] # (n_targets, 2, 2)
-
-            for k in range(agent.n_targets):
-                mean = means[k]
-                cov = covs[k]
-
-                # Eigen decomposition to find ellipse orientation and axes
-                # We use torch.linalg.eigh for symmetric matrices
-                try:
-                    eigvals, eigvecs = torch.linalg.eigh(cov)
-
-                    # Ensure eigenvalues are positive (numerical stability)
-                    eigvals = torch.clamp(eigvals, min=1e-6)
-
-                    # Scale factors: 2 std deviations (approx 95% confidence interval)
-                    # make_circle creates radius 1, so we scale by sqrt(eigval)*2
-                    std = 2  # 1
-                    scale_x = torch.sqrt(eigvals[0]) * std
-                    scale_y = torch.sqrt(eigvals[1]) * std
-
-                    # Rotation angle: arctan of the first eigenvector
-                    # Note: eigvecs columns are the eigenvectors
-                    angle = torch.atan2(eigvecs[1, 0], eigvecs[0, 0])
-
-                    # Create the ellipse
-                    ellipse = rendering.make_circle(radius=1.0, res=20)
-
-                    # Apply transforms
-                    xform = rendering.Transform()
-                    xform.set_scale(scale_x, scale_y)
-                    xform.set_rotation(angle)
-                    xform.set_translation(mean[0], mean[1])
-                    ellipse.add_attr(xform)
-
-                    # Set Color (Green, semi-transparent)
-                    ellipse.set_color(0.0, 1.0, 0.0, alpha=0.05)
-
-                    geoms.append(ellipse)
-                except Exception:
-                    # Skip rendering this ellipse if math fails (e.g. singular matrix)
-                    pass
-
             if isinstance(agent, ForagingAgent) and agent.action.u is not None:
                 agent.color = STATE_COLOR_MAP[int(agent.action.u[env_index, 0].item())]
 
+            if "agent" in agent.name and not belief_visualized:
+                self.visualize_belief(agent, env_index, geoms)
+                belief_visualized = True
+
         return geoms
+
+    def visualize_belief(self, agent, env_index: int, geoms):
+        from vmas.simulator import rendering
+        # Visualize Belief State (Covariance Ellipses)
+        # Iterate over all targets in the belief
+        means = agent.belief_target_pos[env_index]  # (n_targets, 2)
+        covs = agent.belief_target_covariance[env_index]  # (n_targets, 2, 2)
+
+        for k in range(agent.n_targets):
+            mean = means[k]
+            cov = covs[k]
+
+            # Eigen decomposition to find ellipse orientation and axes
+            # We use torch.linalg.eigh for symmetric matrices
+            try:
+                eigvals, eigvecs = torch.linalg.eigh(cov)
+
+                # Ensure eigenvalues are positive (numerical stability)
+                eigvals = torch.clamp(eigvals, min=1e-6)
+
+                # Scale factors: 2 std deviations (approx 95% confidence interval)
+                # make_circle creates radius 1, so we scale by sqrt(eigval)*2
+                std = 2  # 1
+                scale_x = torch.sqrt(eigvals[0]) * std
+                scale_y = torch.sqrt(eigvals[1]) * std
+
+                # Rotation angle: arctan of the first eigenvector
+                # Note: eigvecs columns are the eigenvectors
+                angle = torch.atan2(eigvecs[1, 0], eigvecs[0, 0])
+
+                # Create the ellipse
+                ellipse = rendering.make_circle(radius=1.0, res=20)
+
+                # Apply transforms
+                xform = rendering.Transform()
+                xform.set_scale(scale_x, scale_y)
+                xform.set_rotation(angle)
+                xform.set_translation(mean[0], mean[1])
+                ellipse.add_attr(xform)
+
+                # Set Color (Green, semi-transparent)
+                ellipse.set_color(0.0, 1.0, 0.0, alpha=0.05)
+
+                geoms.append(ellipse)
+            except Exception:
+                # Skip rendering this ellipse if math fails (e.g. singular matrix)
+                pass
 
 
 if __name__ == "__main__":
@@ -288,7 +291,7 @@ if __name__ == "__main__":
             x_dim=1,
             y_dim=1,
             target_speed=0.2,
-            n_agents=1,
+            n_agents=3,
             n_targets=3,
             targets_quality = 'HT',
             is_interactive=True,
@@ -303,5 +306,5 @@ if __name__ == "__main__":
         control_two_agents=control_two_agents,
         display_info=display_info,
         save_render=save_render,
-        render_name=f"{scenario}_interactive" if isinstance(scenario, str) else "interactive",
+        render_name=f"{scenario}_interactive" if isinstance(scenario, str) else "interactive_3",
     )
