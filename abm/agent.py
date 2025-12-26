@@ -69,11 +69,9 @@ class AgentObservations:
         device = agent.device
 
         if indices is None:
-            batch_dim = agent.batch_dim
-            agent_pos = agent.state.pos
-        else:
-            batch_dim = len(indices)
-            agent_pos = agent.state.pos[indices]
+            indices = torch.arange(agent.batch_dim, device=device)
+        batch_dim = len(indices)
+        agent_pos = agent.state.pos[indices]
 
         target_pos = torch.zeros(batch_dim, len(targets), 2, device=device)
         target_covariance = torch.zeros(batch_dim, len(targets), 2, 2, device=device)
@@ -124,16 +122,17 @@ class AgentObservations:
         return target_pos, target_covariance, target_qual, target_qual_var
 
     @staticmethod
-    def others_belief(agent, n_targets, other_agents, other_agent_mask, indices=None):
+    def others_belief(agent, other_agents, other_agent_mask, indices=None):
         """
         Observes the full belief state of a selected neighbor.
         Z_belief = { (mu_j + noise, q_j + noise) }
         """
         device = agent.device
+        n_targets = agent.n_targets
+
         if indices is None:
-            batch_dim = agent.batch_dim
-        else:
-            batch_dim = len(indices)
+            indices = torch.arange(agent.batch_dim, device=device)
+        batch_dim = len(indices)
 
         # 1. Gather neighbor data specifically for the active indices
         # Shape: (batch, n_neighbors, ...)
@@ -208,11 +207,154 @@ class AgentObservations:
 
     @staticmethod
     def others_heading(agent, other_agents, other_agent_mask, indices=None):
-        ...
+        """
+        Observes neighbor's velocity to infer intent.
+        Updates only the target best aligned with velocity.
+        """
+        device = agent.device
+        n_targets = agent.n_targets
+
+        if indices is None:
+            indices = torch.arange(agent.batch_dim, device=device)
+        batch_dim = len(indices)
+
+        # 1. Gather neighbor pos and vel
+        all_neighbors_pos = torch.stack([a.state.pos[indices] for a in other_agents], dim=1)
+        all_neighbors_vel = torch.stack([a.state.vel[indices] for a in other_agents], dim=1)
+
+        batch_mask = other_agent_mask[indices]
+
+        idx_vec = batch_mask.view(batch_dim, 1, 1).expand(-1, 1, 2)
+        neighbor_pos = torch.gather(all_neighbors_pos, 1, idx_vec).squeeze(1)  # (batch, 2)
+        neighbor_vel = torch.gather(all_neighbors_vel, 1, idx_vec).squeeze(1)  # (batch, 2)
+
+        # Normalize velocity
+        vel_norm = torch.norm(neighbor_vel, dim=1, keepdim=True)
+        vel_dir = neighbor_vel / torch.clamp(vel_norm, min=1e-6)  # (batch, 2)
+
+        # 2. Find best aligned target k* in SELF belief
+        # agent.belief_target_pos[indices]: (batch, n_targets, 2)
+        self_belief_mu = agent.belief_target_pos[indices]
+
+        # Vectors from neighbor to all my belief targets
+        # (batch, n_targets, 2) - (batch, 1, 2) -> (batch, n_targets, 2)
+        vec_to_targets = self_belief_mu - neighbor_pos.unsqueeze(1)
+
+        # Project onto velocity direction
+        # (batch, n_targets, 2) * (batch, 1, 2) -> (batch, n_targets) sum dim 2
+        projections = (vec_to_targets * vel_dir.unsqueeze(1)).sum(dim=2)
+
+        # Find index of max projection k*
+        # (batch,)
+        best_target_idx = torch.argmax(projections, dim=1)
+
+        # 3. Construct Observations
+        target_pos = torch.zeros(batch_dim, n_targets, 2, device=device)
+        # Initialize covariance with infinity (effectively) to signify NO info for non-selected
+        HUGE_VAR = 1e6
+        target_covariance = torch.eye(2, device=device).view(1, 1, 2, 2).expand(batch_dim, n_targets, 2, 2) * HUGE_VAR
+
+        target_qual = torch.zeros(batch_dim, n_targets, device=device)
+        target_qual_var = torch.ones(batch_dim, n_targets, device=device) * HUGE_VAR
+
+        # Process the selected target k*
+        # We need to construct the specific observation for the winning index per batch
+
+        # Heading noise parameters
+        sigma_heading = 0.5  # Heuristic value, could be agent parameter
+        var_heading = sigma_heading ** 2
+
+        # For the selected target, z = p_j + max(0, projection) * v_dir
+        # We need to gather the specific projection value
+        max_proj = torch.gather(projections, 1, best_target_idx.unsqueeze(1)).squeeze(1)
+        max_proj = torch.clamp(max_proj, min=0)
+
+        # Calculate calculated position z
+        # (batch, 2) + (batch, 1) * (batch, 2)
+        z_k_star = neighbor_pos + max_proj.unsqueeze(1) * vel_dir
+
+        # Quality observation o_q ~ N(1, sigma^2)
+        o_q_star = torch.normal(mean=1.0, std=sigma_heading, size=(batch_dim,), device=device)
+
+        # 4. Scatter into the return tensors
+        # We use scatter_ to put the values in the right k index
+
+        # Position: scatter (batch, 1, 1) into (batch, n_targets, 2)
+        target_pos.scatter_(1, best_target_idx.view(batch_dim, 1, 1).expand(-1, 1, 2), z_k_star.unsqueeze(1))
+
+        # Covariance: Need to set the specific 2x2 block to identity * noise
+        good_cov = torch.eye(2, device=device).unsqueeze(0).expand(batch_dim, -1, -1) * var_heading  # (batch, 2, 2)
+
+        # Expand index for cov: (batch, 1, 2, 2)
+        idx_cov = best_target_idx.view(batch_dim, 1, 1, 1).expand(-1, 1, 2, 2)
+        target_covariance.scatter_(1, idx_cov, good_cov.unsqueeze(1))
+
+        # Quality
+        target_qual.scatter_(1, best_target_idx.unsqueeze(1), o_q_star.unsqueeze(1))
+        target_qual_var.scatter_(1, best_target_idx.unsqueeze(1),
+                                 torch.tensor(var_heading, device=device).expand(batch_dim, 1))
+
+        return target_pos, target_covariance, target_qual, target_qual_var
 
     @staticmethod
     def others_location(agent, other_agents, other_agent_mask, indices=None):
-        ...
+        """
+        Positional Proxy. Observes neighbor's static position.
+        Updates only the spatially nearest resource in self belief.
+        """
+        device = agent.device
+        n_targets = agent.n_targets
+
+        if indices is None:
+            indices = torch.arange(agent.batch_dim, device=device)
+        batch_dim = len(indices)
+
+
+        # 1. Gather neighbor pos
+        all_neighbors_pos = torch.stack([a.state.pos[indices] for a in other_agents], dim=1)
+        batch_mask = other_agent_mask[indices]
+        idx_vec = batch_mask.view(batch_dim, 1, 1).expand(-1, 1, 2)
+        neighbor_pos = torch.gather(all_neighbors_pos, 1, idx_vec).squeeze(1)  # (batch, 2)
+
+        # 2. Find nearest target k* in SELF belief
+        self_belief_mu = agent.belief_target_pos[indices]  # (batch, n_targets, 2)
+
+        # Dist to all targets
+        dists = torch.norm(self_belief_mu - neighbor_pos.unsqueeze(1), dim=2)  # (batch, n_targets)
+
+        # Argmin
+        best_target_idx = torch.argmin(dists, dim=1)  # (batch,)
+
+        # 3. Construct Observations
+        HUGE_VAR = 1e6
+        target_pos = torch.zeros(batch_dim, n_targets, 2, device=device)
+        target_covariance = torch.eye(2, device=device).view(1, 1, 2, 2).expand(batch_dim, n_targets, 2, 2) * HUGE_VAR
+        target_qual = torch.zeros(batch_dim, n_targets, device=device)
+        target_qual_var = torch.ones(batch_dim, n_targets, device=device) * HUGE_VAR
+
+        # Params
+        sigma_pos = 0.5
+        var_pos = sigma_pos ** 2
+
+        # Observation is just neighbor pos
+        z_k_star = neighbor_pos
+        o_q_star = torch.normal(mean=1.0, std=sigma_pos, size=(batch_dim,), device=device)
+
+        # 4. Scatter
+        # Position
+        target_pos.scatter_(1, best_target_idx.view(batch_dim, 1, 1).expand(-1, 1, 2), z_k_star.unsqueeze(1))
+
+        # Covariance
+        good_cov = torch.eye(2, device=device).unsqueeze(0).expand(batch_dim, -1, -1) * var_pos
+        idx_cov = best_target_idx.view(batch_dim, 1, 1, 1).expand(-1, 1, 2, 2)
+        target_covariance.scatter_(1, idx_cov, good_cov.unsqueeze(1))
+
+        # Quality
+        target_qual.scatter_(1, best_target_idx.unsqueeze(1), o_q_star.unsqueeze(1))
+        target_qual_var.scatter_(1, best_target_idx.unsqueeze(1),
+                                 torch.tensor(var_pos, device=device).expand(batch_dim, 1))
+
+        return target_pos, target_covariance, target_qual, target_qual_var
 
 
 def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: List[Agent]):
@@ -230,7 +372,7 @@ def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: Li
     # Channel 4: None (observations remain the same; belief is not updated).
     channel_observation_functions = {
         0: partial(AgentObservations.private, targets=targets),
-        1: partial(AgentObservations.others_belief, n_targets=len(targets), other_agents=other_agents,
+        1: partial(AgentObservations.others_belief, other_agents=other_agents,
                    other_agent_mask=random_other_agent_ind),
         2: partial(AgentObservations.others_heading, other_agents=other_agents,
                    other_agent_mask=random_other_agent_ind),

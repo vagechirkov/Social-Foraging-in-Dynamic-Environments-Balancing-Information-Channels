@@ -176,8 +176,10 @@ class Scenario(BaseScenario):
         if self.is_interactive:
             probs = torch.zeros(5)
             probs[0] = 0.2 # Private
-            probs[1] = 0.3 # Belief
-            probs[4] = 0.5
+            probs[1] = 0.2 # Belief
+            probs[2] = 0.2 # Heading
+            probs[3] = 0.2 # Position
+            probs[4] = 0.2 # None (no update)
             agent.action.u = torch.distributions.Categorical(probs=probs).sample((agent.batch_dim, 1))
 
         if "agent" in agent.name and isinstance(agent, ForagingAgent):
