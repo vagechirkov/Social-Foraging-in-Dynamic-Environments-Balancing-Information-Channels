@@ -14,19 +14,46 @@ class ForagingAgent(Agent):
             batch_dim,
             device,
             n_targets,
-            base_noise=0.05,  # Base sensor noise
-            dist_noise_scale=0.1,  # Variance increases by this factor per unit distance
-            process_noise_scale=0.02,  # Uncertainty added per step (prediction step)
+            base_noise: float = 0.1,  # sigma_0: Base noise floor
+            dist_noise_scale_priv: float = 2.0,  # beta_priv: Private signal attenuation
+            dist_noise_scale_soc: float = 2.0,  # beta_soc: Social signal attenuation
+            process_noise_scale: float = 0.02,  # sigma_proc: Prediction uncertainty
+            # --- Social Channel Multipliers (Relative to sigma_0) ---
+            social_trans_scale: float = 1.0,  # Scaling for Belief Transfer
+            social_pos_scale: float = 5.0,  # Scaling for Positional Proxy
+            social_heading_scale: float = 5.0,  # Scaling for Heading Heuristic
+            # --- Physics ---
+            momentum: float = 0.9,  # alpha: Gradient smoothing
+            # --- Information usage costs ---
+            cost_priv: float = 0.05,
+            cost_belief: float = 0.10,
+            cost_heading: float = 0.01,
+            cost_pos: float = 0.01,
             *args,
             **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.n_targets = n_targets
+        self.momentum = momentum
 
-        # Hyperparameters
+        # Sensing Parameters
         self.base_noise = base_noise
-        self.dist_noise_scale = dist_noise_scale
+        self.dist_noise_scale_priv = dist_noise_scale_priv
+        self.dist_noise_scale_soc = dist_noise_scale_soc
         self.process_noise_scale = process_noise_scale
+
+        # Derived base noise levels for social channels (before distance scaling)
+        # These correspond to sigma_trans, sigma_pos, sigma_heading
+        self.base_sigma_trans = base_noise * social_trans_scale
+        self.base_sigma_pos = base_noise * social_pos_scale
+        self.base_sigma_heading = base_noise * social_heading_scale
+
+        # 3. Energy Costs Vector [Priv, Belief, Heading, Pos, None]
+        # Used for reward calculation/energy expenditure tracking
+        self.channel_costs = torch.tensor(
+            [cost_priv, cost_belief, cost_heading, cost_pos, 0.0],
+            device=device
+        )
 
         # Reward tracking
         self.target_reward = torch.zeros(batch_dim, device=device)
@@ -89,14 +116,9 @@ class AgentObservations:
             dist = torch.norm(diff, dim=1)  # (batch,)
 
             # 2. Determine variances based on distance
-            # sigma_priv^2(d_ik)
-            sigma_priv = agent.base_noise + agent.dist_noise_scale * dist
+            # sigma_priv^2(d_ik); sigma_qual^2(d_ik) - assuming similar scaling for quality
+            sigma_priv = agent.base_noise + agent.dist_noise_scale_priv * dist
             var_priv = sigma_priv ** 2
-
-            # sigma_qual^2(d_ik) - assuming similar scaling for quality
-            sigma_qual = agent.base_noise + agent.dist_noise_scale * dist
-            var_qual = sigma_qual ** 2
-
 
             # 3. Create the covariance matrix Sigma_{obs} = sigma^2 * I
             # We construct a diagonal matrix for each batch element
@@ -115,9 +137,9 @@ class AgentObservations:
             # Assuming t.quality is (batch_dim,)
             t_qual = true_quality if indices is None else true_quality[indices]
 
-            noise_qual = torch.randn(batch_dim, device=device) * sigma_qual
+            noise_qual = torch.randn(batch_dim, device=device) * sigma_priv
             target_qual[:, i] = t_qual + noise_qual
-            target_qual_var[:, i] = var_qual
+            target_qual_var[:, i] = var_priv
 
         return target_pos, target_covariance, target_qual, target_qual_var
 
@@ -175,7 +197,7 @@ class AgentObservations:
         d_ij = torch.norm(agent.state.pos[indices] - neighbor_pos, dim=1) # (batch,)
 
         # Sigma_trans(d_ij)
-        sigma_trans = agent.base_noise + agent.dist_noise_scale * d_ij
+        sigma_trans = agent.base_sigma_trans + agent.dist_noise_scale_soc * d_ij
         var_trans = sigma_trans ** 2 # (batch,)
 
         # 4. Construct Observations
@@ -260,8 +282,8 @@ class AgentObservations:
         # Process the selected target k*
         # We need to construct the specific observation for the winning index per batch
 
-        # Heading noise parameters
-        sigma_heading = 0.5  # Heuristic value, could be agent parameter
+        # Heading noise parameters; no attenuation by distance here
+        sigma_heading = agent.base_sigma_heading
         var_heading = sigma_heading ** 2
 
         # For the selected target, z = p_j + max(0, projection) * v_dir
@@ -332,8 +354,8 @@ class AgentObservations:
         target_qual = torch.zeros(batch_dim, n_targets, device=device)
         target_qual_var = torch.ones(batch_dim, n_targets, device=device) * HUGE_VAR
 
-        # Params
-        sigma_pos = 0.5
+        # Position noise parameters; no attenuation by distance here
+        sigma_pos = agent.base_sigma_pos
         var_pos = sigma_pos ** 2
 
         # Observation is just neighbor pos
@@ -541,9 +563,8 @@ def compute_gradient(agent: ForagingAgent):
 
     # Set agent's velocity
     # v_i(t) = v_max * (grad / ||grad||)
-    alpha = 0.9
     # v_new = alpha * v_old + (1 - alpha) * v_target
-    agent.state.vel = alpha * agent.state.vel + (1 - alpha) * direction * agent.max_speed
+    agent.state.vel = agent.momentum * agent.state.vel + (1 - agent.momentum) * direction * agent.max_speed
 
 
 def compute_reward(agent: ForagingAgent, world):

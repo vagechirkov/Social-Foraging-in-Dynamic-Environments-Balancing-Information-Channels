@@ -67,6 +67,23 @@ class Scenario(BaseScenario):
         self.n_agents = kwargs.pop("n_agents", 5)
         self.max_speed = kwargs.pop("max_speed", 0.05)
 
+        agent_kwargs = {
+            "base_noise": kwargs.pop("base_noise", 0.1),
+
+            "dist_noise_scale_priv": kwargs.pop("dist_noise_scale_priv", 2.0),
+            "dist_noise_scale_soc": kwargs.pop("dist_noise_scale_soc", 2.0),
+
+            "process_noise_scale": kwargs.pop("process_noise_scale", 0.02),
+            "momentum": kwargs.pop("momentum", 0.9),
+            "social_trans_scale": kwargs.pop("social_trans_scale", 1.0),
+            "social_pos_scale": kwargs.pop("social_pos_scale", 5.0),
+            "social_heading_scale": kwargs.pop("social_heading_scale", 5.0),
+            "cost_priv": kwargs.pop("cost_priv", 0.05),
+            "cost_belief": kwargs.pop("cost_belief", 0.10),
+            "cost_heading": kwargs.pop("cost_heading", 0.01),
+            "cost_pos": kwargs.pop("cost_pos", 0.01)
+        }
+
         self.targets_quality_type = kwargs.pop("targets_quality", "HM")
         if self.targets_quality_type == "HM":
             self.target_qualities = [1.0 for _ in range(self.n_targets)]
@@ -104,9 +121,7 @@ class Scenario(BaseScenario):
                 u_range=3,
                 batch_dim=batch_dim,
                 n_targets=self.n_targets,
-                base_noise=0.1,
-                dist_noise_scale=2.0,
-                process_noise_scale=0.02
+                **agent_kwargs
             )
             world.add_agent(agent)
 
