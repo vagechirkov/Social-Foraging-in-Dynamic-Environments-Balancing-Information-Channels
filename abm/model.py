@@ -11,7 +11,7 @@ from vmas.simulator.scenario import BaseScenario
 from vmas.simulator.utils import Color, ScenarioUtils
 
 from abm.agent import CustomDynamics, ForagingAgent, TargetAgent, add_process_noise_to_belief, compute_gradient, \
-    observe, update_belief
+    compute_reward, observe, update_belief
 
 if typing.TYPE_CHECKING:
     from vmas.simulator.rendering import Geom
@@ -78,17 +78,17 @@ class Scenario(BaseScenario):
             "social_trans_scale": kwargs.pop("social_trans_scale", 1.0),
             "social_pos_scale": kwargs.pop("social_pos_scale", 5.0),
             "social_heading_scale": kwargs.pop("social_heading_scale", 5.0),
-            "cost_priv": kwargs.pop("cost_priv", 0.05),
-            "cost_belief": kwargs.pop("cost_belief", 0.10),
-            "cost_heading": kwargs.pop("cost_heading", 0.01),
-            "cost_pos": kwargs.pop("cost_pos", 0.01)
+            "cost_priv": kwargs.pop("cost_priv", 1.0),
+            "cost_belief": kwargs.pop("cost_belief", 0.5),
+            "cost_heading": kwargs.pop("cost_heading", 0.25),
+            "cost_pos": kwargs.pop("cost_pos", 0.1)
         }
 
         self.targets_quality_type = kwargs.pop("targets_quality", "HM")
         if self.targets_quality_type == "HM":
             self.target_qualities = [1.0 for _ in range(self.n_targets)]
         elif self.targets_quality_type == "HT":
-            self.target_qualities = np.linspace(0.25, 1.75, self.n_targets).tolist()
+            self.target_qualities = np.linspace(0.25, 1.25, self.n_targets).tolist()
         else:
             raise ValueError
 
@@ -158,7 +158,7 @@ class Scenario(BaseScenario):
         )
 
     def reward(self, agent: Agent):
-        if "target" in agent.name:
+        if not isinstance(agent, ForagingAgent):
             return torch.zeros_like(agent.state.pos[:, 0])
 
         # Avoid collisions with each other
@@ -170,14 +170,14 @@ class Scenario(BaseScenario):
                         self.world.get_distance(a, agent) < self.min_collision_distance
                         ] += self.agent_collision_penalty
 
-        agent.target_reward[:] = 0
-
-        return agent.target_reward + agent.collision_reward
+        return agent.total_reward + agent.collision_reward
 
 
     def info(self, agent: Agent) -> Dict[str, Tensor]:
         info = {
+            "target_distance_reward": agent.target_distance_reward,
             "target_reward": agent.target_reward,
+            "channel_costs_reward": agent.channel_costs_reward,
             "collision_reward": agent.collision_reward
         }
         return info
@@ -190,11 +190,11 @@ class Scenario(BaseScenario):
     def process_action(self, agent: Agent):
         if self.is_interactive:
             probs = torch.zeros(5)
-            probs[0] = 0.2 # Private
-            probs[1] = 0.2 # Belief
-            probs[2] = 0.2 # Heading
-            probs[3] = 0.2 # Position
-            probs[4] = 0.2 # None (no update)
+            probs[0] = 1.0 # Private
+            probs[1] = 0. # Belief
+            probs[2] = 0. # Heading
+            probs[3] = 0. # Position
+            probs[4] = 0. # None (no update)
             agent.action.u = torch.distributions.Categorical(probs=probs).sample((agent.batch_dim, 1))
 
         if "agent" in agent.name and isinstance(agent, ForagingAgent):
@@ -206,6 +206,7 @@ class Scenario(BaseScenario):
             add_process_noise_to_belief(agent, self.target_speed)
             update_belief(agent)
             compute_gradient(agent)
+            compute_reward(agent, targets)
         elif isinstance(agent, TargetAgent):
             agent.update_state_based_on_action(agent, self.world)
 
@@ -298,7 +299,7 @@ class Scenario(BaseScenario):
 if __name__ == "__main__":
     scenario = Scenario()
     control_two_agents = False
-    display_info = False
+    display_info = True
     save_render = True # True
 
     InteractiveEnv(
@@ -309,8 +310,8 @@ if __name__ == "__main__":
             wrapper="gym",
             seed=0,
             wrapper_kwargs={"return_numpy": False},
-            x_dim=1,
-            y_dim=1,
+            x_dim=5,
+            y_dim=5,
             target_speed=0.2,
             n_agents=3,
             n_targets=3,

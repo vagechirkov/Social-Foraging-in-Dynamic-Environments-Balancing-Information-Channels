@@ -25,10 +25,10 @@ class ForagingAgent(Agent):
             # --- Physics ---
             momentum: float = 0.9,  # alpha: Gradient smoothing
             # --- Information usage costs ---
-            cost_priv: float = 0.05,
-            cost_belief: float = 0.10,
-            cost_heading: float = 0.01,
-            cost_pos: float = 0.01,
+            cost_priv: float = 0.1,
+            cost_belief: float = 0.5,
+            cost_heading: float = 0.25,
+            cost_pos: float = 0.1,
             *args,
             **kwargs,
     ):
@@ -56,8 +56,11 @@ class ForagingAgent(Agent):
         )
 
         # Reward tracking
-        self.target_reward = torch.zeros(batch_dim, device=device)
+        self.target_distance_reward = torch.zeros(batch_dim, device=device)  # only distance
+        self.target_reward = torch.zeros(batch_dim, device=device)  # distance & quality
+        self.channel_costs_reward = torch.zeros(batch_dim, device=device)  # costs only
         self.collision_reward = torch.zeros(batch_dim, device=device)
+        self.total_reward = torch.zeros(batch_dim, device=device)
 
         # OBSERVATIONS (Current Step)
         # Position z_{i,k}: (batch, n_targets, 2)
@@ -567,9 +570,39 @@ def compute_gradient(agent: ForagingAgent):
     agent.state.vel = agent.momentum * agent.state.vel + (1 - agent.momentum) * direction * agent.max_speed
 
 
-def compute_reward(agent: ForagingAgent, world):
-    # TODO: compute reward as an inverse distance to closest target
-    agent.target_reward = ...
+def compute_reward(agent: ForagingAgent, targets):
+    t_pos = torch.stack([t.state.pos for t in targets], dim=1)
+    t_qual = torch.stack([t.quality for t in targets], dim=1)
+
+    # Calculate Distances
+    # agent.state.pos is (batch, 2) -> unsqueeze to (batch, 1, 2) for broadcasting
+    diff = agent.state.pos.unsqueeze(1) - t_pos
+    dist = torch.norm(diff, dim=2)  # (batch, n_targets)
+
+    # Find Nearest Target
+    # (batch, 1)
+    nearest_target_id = torch.argmin(dist, dim=1, keepdim=True)
+
+    # Gather data for the nearest target
+    # (batch, 1) -> squeeze to (batch,)
+    nearest_target_dist = torch.gather(dist, 1, nearest_target_id).squeeze(1)
+    nearest_target_quality = torch.gather(t_qual, 1, nearest_target_id).squeeze(1)
+
+    # Calculate Gathering Reward
+    # Inverse square decay based on distance
+    agent.target_distance_reward = (1.0 / (1.0 + nearest_target_dist ** 2.0))
+    agent.target_reward = agent.target_distance_reward * nearest_target_quality  # Scale by quality
+
+    # Calculate Information Channel Costs
+    if agent.action.u is not None:
+        # channel id: (batch,)
+        channel_indices = agent.action.u[:, 0].long()
+        # Retrieve cost for selected channel
+        agent.channel_costs_reward = -agent.channel_costs[channel_indices]
+    else:
+        agent.channel_costs_reward = torch.zeros(agent.batch_dim, device=agent.device)
+
+    agent.total_reward = agent.target_reward + agent.channel_costs_reward
 
 
 class TargetAgent(Agent):
