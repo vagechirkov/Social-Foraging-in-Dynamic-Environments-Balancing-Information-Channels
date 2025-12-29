@@ -13,7 +13,7 @@
 source .venv/bin/activate
 
 # add current directory to python path
-eexport PYTHONPATH=$PYTHONPATH:.
+export PYTHONPATH=$PYTHONPATH:.
 
 t_speed=$1
 
