@@ -10,8 +10,10 @@ import numpy as np
 import torch
 import wandb
 from deap import base, creator, tools
+from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
-from torchrl.envs import ParallelEnv, VmasEnv
+from torchrl.envs import ParallelEnv, TransformedEnv, VmasEnv
+from torchrl.envs.transforms import Transform
 
 from model import Scenario
 
@@ -22,6 +24,28 @@ N_CHANNELS = len(CHANNEL_NAMES)
 # Must be defined at module level for multiprocessing pickling compatibility
 creator.create("FitnessMax", base.Fitness, weights=(1.0,))
 creator.create("Individual", list, fitness=creator.FitnessMax)
+
+
+class GenePersistenceTransform(Transform):
+    """
+    Ensures that 'genes' found in the input tensordict are copied
+    to the output tensordict at every step.
+    """
+    def _step(self, tensordict, next_tensordict):
+        if "genes" in tensordict.keys():
+            next_tensordict["genes"] = tensordict["genes"]
+        return next_tensordict
+
+    def _reset(self, tensordict, tensordict_reset):
+        if "genes" in tensordict.keys():
+            tensordict_reset["genes"] = tensordict["genes"]
+        return tensordict_reset
+
+    def transform_input_spec(self, input_spec):
+        return input_spec
+
+    def transform_output_spec(self, output_spec):
+        return output_spec
 
 
 class GeneticAlgorithm:
@@ -59,10 +83,13 @@ class GeneticAlgorithm:
 
         next_gen_islands = []
         for island in islands:
-            # 1. Selection
-            offspring = self.toolbox.select(island, len(island))
+            # 1. Save Elites (e.g., Top 20%)
+            n_elites = int(len(island) * 0.2)
+            elites = tools.selBest(island, k=int(len(island) * 0.2))
+            elites = list(map(self.toolbox.clone, elites)) # Clone to protect from mutation
 
-            # 2. Cloning
+            # 2. Select Parents for the rest
+            offspring = self.toolbox.select(island, len(island) - n_elites)
             offspring = list(map(self.toolbox.clone, offspring))
 
             # 3. Mutation
@@ -71,7 +98,7 @@ class GeneticAlgorithm:
                     self.toolbox.mutate(mutant)
                     del mutant.fitness.values
 
-            next_gen_islands.append(offspring)
+            next_gen_islands.append(elites + offspring)
 
         return next_gen_islands
 
@@ -120,63 +147,86 @@ class VmasEvaluator:
             cost_priv=self.args.costs[0],
             cost_belief=self.args.costs[1],
             cost_heading=self.args.costs[2],
-            cost_pos=self.args.costs[3]
+            cost_pos=self.args.costs[3],
+            min_dist_between_entities=0.001,
         )
 
     def _init_env(self):
         """Initializes either a simple VmasEnv or a ParallelEnv."""
         if self.num_workers > 1 and self.device == "cpu":
-            return ParallelEnv(
+            base_env = ParallelEnv(
                 num_workers=self.num_workers,
                 create_env_fn=lambda: self._make_env_fn(self.sub_batch_size)
             )
         else:
-            return self._make_env_fn(self.total_pop)
+            base_env = self._make_env_fn(self.total_pop)
 
-    def evaluate(self, islands: List[List[Any]]) -> torch.Tensor:
-        """Runs the simulation and assigns fitness to individuals."""
-        # Flatten population
+        # 2. Wrap the Main Env (keeps genes alive in the rollout loop)
+        return TransformedEnv(base_env, GenePersistenceTransform())
+
+    def evaluate(self, env, islands: List[List[Any]]) -> torch.Tensor:
+        # Prepare Genes
         flat_population = [ind for island in islands for ind in island]
-        population_logits = torch.tensor(flat_population, dtype=torch.float32, device=self.device)
+        population_genes = torch.tensor(flat_population, dtype=torch.float32, device=self.device)
 
-        env = self._init_env()
         total_pop = len(islands)
-        # Determine shape based on Env type
-        if isinstance(env, ParallelEnv):
-            reshaped_logits = population_logits.view(
-                self.num_workers, self.sub_batch_size, self.args.n_agents, N_CHANNELS
-            )
-            time_dim = 2
-        else:
-            reshaped_logits = population_logits.view(total_pop, self.args.n_agents, N_CHANNELS)
-            time_dim = 1
 
-        # Define Policy
-        def policy_func(tensordict=None):
-            dist = torch.distributions.Categorical(logits=reshaped_logits)
+        # Reshape Genes & Match Environment Batch Size
+        # (This logic ensures [Workers, SubBatch] structure is correct)
+        if isinstance(env.base_env, ParallelEnv): # Check base_env because of TransformedEnv wrapper
+            reshaped_genes = population_genes.view(
+                self.num_workers,
+                self.sub_batch_size,
+                self.args.n_agents,
+                N_CHANNELS
+            )
+            batch_size_shape = [self.num_workers, self.sub_batch_size]
+        else:
+            reshaped_genes = population_genes.view(
+                total_pop,
+                self.args.n_agents,
+                N_CHANNELS
+            )
+            batch_size_shape = [total_pop]
+
+        # Create Initial TensorDict
+        initial_tensordict = TensorDict(
+            {"genes": reshaped_genes},
+            batch_size=batch_size_shape,
+            device=self.device
+        )
+
+        # Policy
+        def policy_func(genes_logits):
+            dist = torch.distributions.Categorical(logits=genes_logits)
             return dist.sample().unsqueeze(-1).float()
 
-        policy = TensorDictModule(policy_func, in_keys=[], out_keys=[env.action_key])
+        policy = TensorDictModule(policy_func, in_keys=["genes"], out_keys=[env.action_key])
 
         # Rollout
         with torch.no_grad():
-            rollouts = env.rollout(max_steps=self.args.episode_len, policy=policy)
+            env.reset(initial_tensordict)
+            rollouts = env.rollout(
+                max_steps=self.args.episode_len,
+                policy=policy,
+                tensordict=initial_tensordict,
+                auto_reset=True
+            )
 
         # Compute Rewards
         rewards_all = rollouts["next", "agents", "reward"]
-        total_rewards = rewards_all.sum(dim=time_dim).squeeze(-1)
 
-        # Assign Fitness to DEAP individuals
+        time_dim_idx = -3 # Assuming [..., Time, Agents, 1]
+        total_rewards = rewards_all.sum(dim=time_dim_idx).squeeze(-1)
+
+        # Flatten batch dimensions ([6, 10] -> [60])
+        if len(total_rewards.shape) > 2:
+            total_rewards = total_rewards.flatten(0, 1)
+
+        # Assign Fitness
         flat_rewards = total_rewards.cpu().numpy().flatten()
         for ind, reward in zip(flat_population, flat_rewards):
             ind.fitness.values = (float(reward),)
-
-
-        # Reshape for analysis: [POP_SIZE, N_AGENTS] (Flattened across workers)
-        if isinstance(env, ParallelEnv):
-            total_rewards = total_rewards.flatten(0, 1) # Merge workers and sub_batches
-        else:
-            total_rewards = total_rewards.reshape(total_pop, self.args.n_agents)
 
         return total_rewards
 
@@ -198,7 +248,7 @@ class ExperimentLogger:
             config=vars(self.args)
         )
 
-    def log_metrics(self, gen: int, fitness_tensor: torch.Tensor, steps_per_sec: float):
+    def log_metrics(self, gen: int, fitness_tensor: torch.Tensor, steps_per_sec: float, islands: List[List[Any]]):
         # 1. Global Statistics (All Agents)
         global_mean = fitness_tensor.mean().item()
         global_median = fitness_tensor.median().item()
@@ -217,6 +267,21 @@ class ExperimentLogger:
         top_k_agents_fitness = fitness_tensor[top_k_indices]
         top_k_mean = top_k_agents_fitness.mean().item()
         top_k_median = top_k_agents_fitness.median().item()
+
+        # 4. Channel Probabilities (Global vs Top-K)
+        # Flatten all genes to calculate global probabilities
+        all_genes = [ind for island in islands for ind in island]
+        all_logits = torch.tensor(all_genes, dtype=torch.float32, device='cpu')
+        # Softmax over channel dimension to get probabilities
+        all_probs = torch.softmax(all_logits, dim=-1)
+        global_probs_mean = all_probs.mean(dim=0)
+
+        # Get Top-K genes
+        top_k_indices_list = top_k_indices.cpu().numpy()
+        top_k_genes = [ind for i in top_k_indices_list for ind in islands[i]]
+        top_k_logits = torch.tensor(top_k_genes, dtype=torch.float32, device='cpu')
+        top_k_probs = torch.softmax(top_k_logits, dim=-1)
+        top_k_probs_mean = top_k_probs.mean(dim=0)
 
         print(f"Gen {gen:4d} | Global Mean: {global_mean:8.4f} | "
               f"Global Max: {global_max:8.4f} | "
@@ -243,6 +308,12 @@ class ExperimentLogger:
                 # evaluation speed
                 "steps_per_sec": steps_per_sec
             }
+
+            # Log Channel Probabilities
+            for i, name in enumerate(CHANNEL_NAMES):
+                metrics[f"prob_global/{name}"] = global_probs_mean[i].item()
+                metrics[f"prob_top_{top_k}/{name}"] = top_k_probs_mean[i].item()
+
             wandb.log(metrics)
 
     def log_heatmap(self, islands, fitness_tensor, gen):
@@ -321,9 +392,9 @@ class ExperimentLogger:
 
         ax.set_yticks(y_ticks)
         ax.set_yticklabels(y_labels)
-        ax.set_ylabel("Avg Island Reward")
+        ax.set_ylabel("Avg Group Reward")
 
-        ax.set_title(f"Top {top_k} Strategies")
+        ax.set_title(f"Top {top_k} Groups")
 
         # Overlay lines
         for i in range(heatmap_data.shape[0]):
@@ -368,12 +439,12 @@ class ExperimentLogger:
             # Add a dummy line with the same color for the legend (to avoid multiple entries)
             ax.plot([], [], color=colors[i], label=f"Rank {i+1}")
 
-        ax.set_title(f"Top {top_k} Environments")
+        ax.set_title(f"Top {top_k} Groups")
         ax.set_ylabel("Selection Probability")
         ax.set_xlabel("Information Channel")
         ax.set_ylim(-0.05, 1.05)
         ax.grid(True, alpha=0.3)
-        ax.legend(title="Island Rank", bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax.legend(title="Group Rank", bbox_to_anchor=(1.05, 1), loc='upper left')
 
         plt.tight_layout()
         return fig
@@ -423,7 +494,7 @@ def run_experiment():
     device = "cpu"
 
     # Initialize Modules
-    logger = ExperimentLogger(args.use_wandb, args, save_fig=False)
+    logger = ExperimentLogger(args.use_wandb, args, save_fig=True)
     evaluator = VmasEvaluator(args, device)
     ga = GeneticAlgorithm(n_channels=N_CHANNELS)
 
@@ -441,13 +512,15 @@ def run_experiment():
     for gen in range(args.ngen):
         gen_step = gen + 1
         gen_start = time.time()
+
         # 1. Evaluate
-        fitness_tensor = evaluator.evaluate(islands)
+        env = evaluator._init_env()
+        fitness_tensor = evaluator.evaluate(env, islands)
         gen_duration = time.time() - gen_start
 
         # 2. Log
         steps_per_sec = (total_pop_size * args.episode_len) / gen_duration
-        logger.log_metrics(gen_step, fitness_tensor, steps_per_sec)
+        logger.log_metrics(gen_step, fitness_tensor, steps_per_sec, islands)
 
         if gen % args.log_freq == 0 or gen_step == args.ngen:
             logger.log_heatmap(islands, fitness_tensor, gen_step)

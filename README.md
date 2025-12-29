@@ -14,3 +14,10 @@ uv tree
 ```
 
 See more info [here](https://docs.astral.sh/uv/) and [here](https://docs.astral.sh/uv/guides/integration/pytorch/#configuring-accelerators-with-optional-dependencies).
+
+
+
+## Run EA on CPU cluster
+```bash
+sbatch ea_cpu_driver_itb.sh
+```
