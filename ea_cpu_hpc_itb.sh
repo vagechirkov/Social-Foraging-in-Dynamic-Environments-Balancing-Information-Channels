@@ -6,7 +6,7 @@
 #SBATCH --partition=long                            # Partition to submit to
 #SBATCH --nodes=1                                   # Ensure it runs on one node
 #SBATCH --ntasks=1                                  # Run a single task
-#SBATCH --cpus-per-task=48                          # Request 48 CPUs
+#SBATCH --cpus-per-task=64                          # Request 48 CPUs
 #SBATCH --mem=64G                                   # Memory allocation
 
 

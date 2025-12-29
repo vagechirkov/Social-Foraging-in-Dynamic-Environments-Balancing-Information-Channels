@@ -7,6 +7,9 @@ uv sync
 # for gpu installation
 uv sync --extra cu121
 
+# for cpu installation
+# uv sync --extra cpu
+
 uv tree
 ```
 
