@@ -23,6 +23,7 @@ for t_speed in "${target_speed_array[@]}"; do
         --target_speed="$t_speed" \
         --episode_len 1000 \
         --pop_size 1000 \
+        --ngen 1000 \
         --costs 0.05 0.02 0.01 0.005 \
         --use_wandb \
         --run_name="init_explor"
