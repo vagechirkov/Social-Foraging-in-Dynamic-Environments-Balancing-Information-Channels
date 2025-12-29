@@ -419,7 +419,8 @@ def run_experiment():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu"
 
     # Initialize Modules
     logger = ExperimentLogger(args.use_wandb, args, save_fig=False)

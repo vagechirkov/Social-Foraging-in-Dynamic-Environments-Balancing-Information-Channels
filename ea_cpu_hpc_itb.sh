@@ -15,16 +15,14 @@ source .venv/bin/activate
 # add current directory to python path
 eexport PYTHONPATH=$PYTHONPATH:.
 
-target_speed_array=(0.1 0.3 0.5)
+t_speed=$1
 
-for t_speed in "${target_speed_array[@]}"; do
-    uv run abm/info_channels_ea.py \
-        --n_agents 10 \
-        --target_speed="$t_speed" \
-        --episode_len 1000 \
-        --pop_size 1000 \
-        --ngen 1000 \
-        --costs 0.05 0.02 0.01 0.005 \
-        --use_wandb \
-        --run_name="init_explor"
-done
+uv run abm/info_channels_ea.py \
+    --n_agents 10 \
+    --target_speed="$t_speed" \
+    --episode_len 1000 \
+    --pop_size 1000 \
+    --ngen 1000 \
+    --costs 0.05 0.02 0.01 0.005 \
+    --use_wandb \
+    --run_name="init_explor"
