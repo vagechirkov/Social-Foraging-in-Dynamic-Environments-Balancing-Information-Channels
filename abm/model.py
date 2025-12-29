@@ -88,7 +88,7 @@ class Scenario(BaseScenario):
         if self.targets_quality_type == "HM":
             self.target_qualities = [1.0 for _ in range(self.n_targets)]
         elif self.targets_quality_type == "HT":
-            self.target_qualities = np.linspace(0.25, 1.25, self.n_targets).tolist()
+            self.target_qualities = np.linspace(0.5, 1.5, self.n_targets).tolist()
         else:
             raise ValueError
 
@@ -118,7 +118,7 @@ class Scenario(BaseScenario):
                 color=Color.BLUE,
                 device=device,
                 dynamics=CustomDynamics(),
-                u_range=3,
+                u_range=5,
                 batch_dim=batch_dim,
                 n_targets=self.n_targets,
                 **agent_kwargs
@@ -185,16 +185,16 @@ class Scenario(BaseScenario):
     def observation(self, agent: Agent):
         if "target" in agent.name:
             return torch.zeros(1, 2, device=agent.device)
-        return torch.zeros(1, 2, device=agent.device)
+        return torch.zeros(agent.batch_dim, 2, device=agent.device)
 
     def process_action(self, agent: Agent):
         if self.is_interactive:
             probs = torch.zeros(5)
-            probs[0] = 1.0 # Private
-            probs[1] = 0. # Belief
-            probs[2] = 0. # Heading
-            probs[3] = 0. # Position
-            probs[4] = 0. # None (no update)
+            probs[0] = 0.1 # Private
+            probs[1] = 0.1 # Belief
+            probs[2] = 0.1 # Heading
+            probs[3] = 0.1 # Position
+            probs[4] = 0.6 # None (no update)
             agent.action.u = torch.distributions.Categorical(probs=probs).sample((agent.batch_dim, 1))
 
         if "agent" in agent.name and isinstance(agent, ForagingAgent):
@@ -288,7 +288,7 @@ class Scenario(BaseScenario):
                 ellipse.add_attr(xform)
 
                 # Set Color (Gray, semi-transparent)
-                ellipse.set_color(*Color.GRAY.value, alpha=0.05)
+                ellipse.set_color(*Color.BLUE.value, alpha=0.05)
 
                 geoms.append(ellipse)
             except Exception:
@@ -312,8 +312,8 @@ if __name__ == "__main__":
             wrapper_kwargs={"return_numpy": False},
             x_dim=5,
             y_dim=5,
-            target_speed=0.2,
-            n_agents=3,
+            target_speed=0.1,
+            n_agents=10,
             n_targets=3,
             targets_quality = 'HT',
             is_interactive=True,
