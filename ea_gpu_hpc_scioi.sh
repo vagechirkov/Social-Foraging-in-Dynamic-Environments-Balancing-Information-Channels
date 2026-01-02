@@ -29,7 +29,7 @@ dim=$2
 
 # uv run
 python abm/info_channels_ea.py \
-    --n_agents 100 \
+    --n_agents 2000 \
     --target_speed "$t_speed" \
     --episode_len 3000 \
     --pop_size 20 \

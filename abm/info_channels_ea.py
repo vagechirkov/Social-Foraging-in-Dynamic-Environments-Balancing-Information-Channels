@@ -513,13 +513,14 @@ def run_experiment():
 
     # --- Evolution Loop ---
     start_time = time.time()
+    env = evaluator._init_env()
     for gen in range(args.ngen):
         gen_step = gen + 1
         gen_start = time.time()
 
         # 1. Evaluate
-        env = evaluator._init_env()
-        fitness_tensor = evaluator.evaluate(env, islands)
+        with torch.no_grad():
+            fitness_tensor = evaluator.evaluate(env, islands)
         gen_duration = time.time() - gen_start
 
         # 2. Log
