@@ -149,6 +149,8 @@ class VmasEvaluator:
             cost_heading=self.args.costs[2],
             cost_pos=self.args.costs[3],
             min_dist_between_entities=0.001,
+            dist_noise_scale_priv=self.args.noise_priv,
+            dist_noise_scale_soc=self.args.noise_soc,
         )
 
     def _init_env(self):
@@ -480,6 +482,8 @@ def parse_args():
     parser.add_argument("--target_speed", type=float, default=0.05, help="Agent speed")
     parser.add_argument("--costs", nargs=4, type=float, default=[1.0, 0.5, 0.25, 0.1],
                         help="Costs: [Priv, Belief, Heading, Pos]")
+    parser.add_argument("--noise_priv", type=float, default=2.0, help="Private noise dist scale")
+    parser.add_argument("--noise_soc", type=float, default=2.0, help="Social noise dist scale")
 
     return parser.parse_args()
 

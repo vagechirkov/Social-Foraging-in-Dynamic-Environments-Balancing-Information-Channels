@@ -39,6 +39,5 @@ python abm/info_channels_ea.py \
     --use_wandb \
     --use_gpu \
     --run_name "init_explor" \
-    --base_noise 0.1 \
     --dist_noise_scale_priv 2.0 \
     --dist_noise_scale_soc 0.5 \
