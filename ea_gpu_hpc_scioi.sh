@@ -10,15 +10,30 @@
 #SBATCH --time=7-00:00:00                           # Maximum runtime (hh:mm:ss)
 #SBATCH --mem=16G                                   # Memory allocation
 
+set -x
+
+date
+hostname
+
 module load nvidia/cuda/12.1
 
 # assuming that current direction is Social-Foraging-in-Dynamic-Environments-Balancing-Information-Channels
+echo "Current working directory: $(pwd)"
 
 # add current directory to python path
 export PYTHONPATH=$PYTHONPATH:.
 
 source ~/.bashrc
 source .venv/bin/activate
+
+# Check which python and uv are being used
+echo "Python path: $(which python)"
+echo "Python version: $(python --version)"
+echo "UV path: $(which uv)"
+echo "Checking GPU availability..."
+nvidia-smi
+# Check if Python can actually see the GPU
+python -c "import torch; print(f'Torch sees GPU: {torch.cuda.is_available()}')" || echo "WARNING: Could not run torch check"
 
 t_speed=$1
 
