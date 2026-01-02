@@ -13,7 +13,7 @@
 module load nvidia/cuda/12.1
 
 # assuming that current direction is Social-Foraging-in-Dynamic-Environments-Balancing-Information-Channels
-echo "Current working directory: $(pwd)"
+# echo "Current working directory: $(pwd)"
 
 # add current directory to python path
 export PYTHONPATH=$PYTHONPATH:.
@@ -21,14 +21,8 @@ export PYTHONPATH=$PYTHONPATH:.
 source ~/.bashrc
 source .venv/bin/activate
 
-# Check which python and uv are being used
-echo "Python path: $(which python)"
-echo "Python version: $(python --version)"
-echo "UV path: $(which uv)"
-echo "Checking GPU availability..."
-nvidia-smi
-echo "uv sync --extra cu121..."
-uv sync --extra cu121 --verbose
+# echo "uv sync --extra cu121..."
+# uv sync --extra cu121 --verbose
 
 t_speed=$1
 
@@ -39,9 +33,11 @@ uv run abm/info_channels_ea.py \
     --pop_size 50 \
     --ngen 1000 \
     --top_k 5 \
-    --dim 3 \
+    --dim 15 \
     --costs 0.05 0.02 0.01 0.005 \
     --use_wandb \
     --use_gpu \
     --run_name "init_explor" \
-    --base_noise 0.01
+    --base_noise 0.1 \
+    --dist_noise_scale_priv 2.0 \
+    --dist_noise_scale_soc 0.5 \
