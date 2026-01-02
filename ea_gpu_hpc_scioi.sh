@@ -25,19 +25,20 @@ source .venv/bin/activate
 # uv sync --extra cu121 --verbose
 
 t_speed=$1
+dim=$2
 
 # uv run
 python abm/info_channels_ea.py \
-    --n_agents 500 \
+    --n_agents 100 \
     --target_speed "$t_speed" \
     --episode_len 3000 \
-    --pop_size 50 \
+    --pop_size 20 \
     --ngen 1000 \
     --top_k 5 \
-    --dim 15 \
+    --dim "$dim" \
     --costs 0.05 0.02 0.01 0.005 \
     --use_wandb \
     --use_gpu \
     --run_name "init_explor" \
-    --noise_priv 2.0 \
-    --noise_soc 0.1
+    --dist_noise_scale_priv 2.0 \
+    --dist_noise_scale_soc 0.1
