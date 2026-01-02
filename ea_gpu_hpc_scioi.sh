@@ -29,8 +29,8 @@ echo "Checking GPU availability..."
 nvidia-smi
 
 t_speed=$1
-
-uv run --frozen abm/info_channels_ea.py \
+# uv run --frozen
+python -u abm/info_channels_ea.py \
     --n_agents 500 \
     --target_speed "$t_speed" \
     --episode_len 3000 \
