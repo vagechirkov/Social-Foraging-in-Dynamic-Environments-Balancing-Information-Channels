@@ -463,6 +463,7 @@ def parse_args():
     parser.add_argument("--run_name", type=str, default='omega_ea', help="WandB run name")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--use_wandb", action="store_true", help="Enable WandB logging")
+    parser.add_argument("--use_gpu", action="store_true", help="Enable WandB logging")
     parser.add_argument("--log_freq", type=int, default=10,
                         help="Frequency of heatmap logging (generations)")
 
@@ -490,8 +491,7 @@ def run_experiment():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    # device = "cuda" if torch.cuda.is_available() else "cpu"
-    device = "cpu"
+    device = "cuda" if torch.cuda.is_available() and args.use_gpu else "cpu"
 
     # Initialize Modules
     logger = ExperimentLogger(args.use_wandb, args, save_fig=True)

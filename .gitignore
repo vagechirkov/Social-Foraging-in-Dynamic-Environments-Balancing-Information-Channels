@@ -523,4 +523,5 @@ cython_debug/
 
 *.mp4
 wandb/
+*.png
 
