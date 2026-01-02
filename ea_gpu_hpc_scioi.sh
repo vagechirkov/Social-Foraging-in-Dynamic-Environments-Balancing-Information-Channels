@@ -28,7 +28,7 @@ echo "UV path: $(which uv)"
 echo "Checking GPU availability..."
 nvidia-smi
 echo "uv sync --extra cu121..."
-uv sync --extra cu121
+uv sync --extra cu121 --verbose
 
 t_speed=$1
 
