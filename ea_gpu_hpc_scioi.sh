@@ -29,10 +29,10 @@ dim=$2
 
 # uv run
 python abm/info_channels_ea.py \
-    --n_agents 2000 \
+    --n_agents 50 \
     --target_speed "$t_speed" \
-    --episode_len 3000 \
-    --pop_size 20 \
+    --episode_len 1000 \
+    --pop_size 100 \
     --ngen 1000 \
     --top_k 5 \
     --dim "$dim" \

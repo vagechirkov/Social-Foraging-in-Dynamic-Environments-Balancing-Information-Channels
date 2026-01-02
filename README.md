@@ -21,3 +21,9 @@ See more info [here](https://docs.astral.sh/uv/) and [here](https://docs.astral.
 ```bash
 sbatch ea_cpu_driver_itb.sh
 ```
+
+
+## RUN EA on GPU cluster
+```bash
+bash ea_gpu_driver_scioi.sh 
+```
