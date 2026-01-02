@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=train-collective-tracking        # Job name
+#SBATCH --job-name=ea-collective-tracking           # Job name
 #SBATCH --output=job_%j.log                         # Output log file (%j will be replaced with job ID)
 #SBATCH --error=job_%j.log                          # Error log file
 #SBATCH --ntasks=1                                  # Number of tasks
@@ -17,9 +17,8 @@ module load nvidia/cuda/12.1
 # add current directory to python path
 export PYTHONPATH=$PYTHONPATH:.
 
-source ~/.venv/bin/activate
 source ~/.bashrc
-
+source .venv/bin/activate
 
 t_speed=$1
 
