@@ -6,8 +6,6 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
 dependencies = [
-    "torch>=2.5.1",
-
     # RL & ML
     "vmas>=1.4.3",
     "tensordict>=0.6.2",
@@ -29,12 +27,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# We keep these empty just to trigger the "extra" flags
-cpu = []
-cu121 = []
+cpu = [
+    "torch>=2.5.1",
+]
+cu121 = [
+    "torch>=2.5.1",
+]
 
 [tool.uv]
-# Define the custom indices
 index = [
     { name = "pytorch-cu121", url = "https://download.pytorch.org/whl/cu121", explicit = true },
     { name = "pytorch-cpu", url = "https://download.pytorch.org/whl/cpu", explicit = true }
@@ -42,10 +42,6 @@ index = [
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cu121", extra = "cu121" },
-    { index = "pytorch-cpu", extra = "cpu" }
-]
-torchvision = [
     { index = "pytorch-cu121", extra = "cu121" },
     { index = "pytorch-cpu", extra = "cpu" }
 ]
