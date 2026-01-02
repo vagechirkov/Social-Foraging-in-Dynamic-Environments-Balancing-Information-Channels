@@ -390,9 +390,9 @@ def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: Li
     channel_indices = agent.action.u[:, 0].long()
 
     if len(other_agents) != 0:
-        random_other_agent_ind = torch.randint(len(other_agents), (agent.batch_dim,))
+        random_other_agent_ind = torch.randint(len(other_agents), (agent.batch_dim,), device=agent.device)
     else:
-        random_other_agent_ind = torch.zeros(agent.batch_dim).long()
+        random_other_agent_ind = torch.zeros(agent.batch_dim, device=agent.device).long()
 
     # Channel 4: None (observations remain the same; belief is not updated).
     channel_observation_functions = {
