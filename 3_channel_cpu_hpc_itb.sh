@@ -19,11 +19,11 @@ t_speed=$1
 gamma_bel=$2
 beta_bel=$3
 
-uv run abm/3_channels_abm_exploration.py \
-    --n_agents 10 \
-    --max_steps 1000 \
-    --replicates 100 \
-    --run_name "01_2026" \
-    --target_speed "$t_speed" \
-    --social_trans_scale "$gamma_bel" \
-    --dist_noise_scale_soc "$beta_bel"
+python abm/3_channels_abm_exploration.py \
+    --m n_agents=10 \
+    max_steps=1000 \
+    replicates=100 \
+    run_name="01_2026" \
+    target_speed="$t_speed" \
+    social_trans_scale="$gamma_bel" \
+    dist_noise_scale_soc="$beta_bel"
