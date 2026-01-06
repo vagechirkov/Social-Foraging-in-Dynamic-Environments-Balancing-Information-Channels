@@ -524,4 +524,6 @@ cython_debug/
 *.mp4
 wandb/
 *.png
+uv.lock
+outputs/
 

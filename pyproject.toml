@@ -16,6 +16,7 @@ dependencies = [
     # Tools
     "ipykernel>=6.29.5",
     "matplotlib>=3.9",
+    "mpltern",
     "seaborn>=0.13.2",
     "notebook>=7.4.2",
     "pillow>=11.1.0",

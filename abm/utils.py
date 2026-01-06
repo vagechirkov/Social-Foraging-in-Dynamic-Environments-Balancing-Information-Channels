@@ -1,14 +1,16 @@
 import multiprocessing
 import uuid
-from typing import Any, List
+from typing import Any, List, Dict
 
 import numpy as np
 import torch
 import wandb
 from matplotlib import pyplot as plt
+from omegaconf import DictConfig, OmegaConf
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
-from torchrl.envs import ParallelEnv, Transform, TransformedEnv, VmasEnv
+from torchrl.envs import ParallelEnv, TransformedEnv, VmasEnv
+from torchrl.envs.transforms import Transform
 
 from abm.model import Scenario
 
@@ -38,31 +40,48 @@ class GenePersistenceTransform(Transform):
         return output_spec
 
 
+class SimpleAgent(list):
+    """
+    A simple wrapper that mimics the structure of a DEAP individual
+    (list of genes + fitness attribute) for use in non-evolutionary scripts.
+    """
+    def __init__(self, genes):
+        super().__init__(genes)
+        class Fitness:
+            def __init__(self):
+                self.values = (0.0,)
+        self.fitness = Fitness()
+
+
 class VmasEvaluator:
     """Handles Environment Creation and Fitness Evaluation."""
 
-    def __init__(self, args, device: str):
-        self.args = args
+    def __init__(self, cfg, device: str):
+        self.cfg = cfg
         self.device = device
-        self.num_workers = self._get_num_workers()
+        self.num_workers = self.get_num_workers()
+
+        # Handle DictConfig (Hydra) vs Namespace (argparse) access for pop_size
+        n_envs = cfg.n_envs
+
         # Calculate batch sizes based on total population
         if self.num_workers > 1 and self.device == "cpu":
-            self.sub_batch_size = args.pop_size // self.num_workers
+            self.sub_batch_size = n_envs // self.num_workers
             self.total_pop = self.sub_batch_size * self.num_workers
         else:
-            self.sub_batch_size = args.pop_size
-            self.total_pop = args.pop_size
+            self.sub_batch_size = n_envs
+            self.total_pop = n_envs
 
-        if self.total_pop != args.pop_size:
-            print(f"Warning: Total population adjusted from {args.pop_size} to "
+        if self.total_pop != n_envs:
+            print(f"Warning: Total population adjusted from {n_envs} to "
                   f"{self.total_pop} to match worker count.")
 
         print(f"Initializing Env on {self.device} | Workers: {self.num_workers} | Total Pop: {self.total_pop}")
 
     @staticmethod
-    def _get_num_workers() -> int:
+    def get_num_workers() -> int:
         available_cpus = multiprocessing.cpu_count()
-        return max(1, available_cpus - 2)
+        return max(1, available_cpus)
 
     def _make_env_fn(self, num_envs: int):
         """Factory for a single VmasEnv batch."""
@@ -70,22 +89,7 @@ class VmasEvaluator:
             scenario=Scenario(),
             num_envs=num_envs,
             device=self.device,
-            continuous_actions=True,
-            max_steps=self.args.episode_len,
-            x_dim=self.args.dim,
-            y_dim=self.args.dim,
-            n_agents=self.args.n_agents,
-            n_targets=3,
-            targets_quality='HT',
-            agent_radius=0.05,
-            max_speed=self.args.target_speed,
-            cost_priv=self.args.costs[0],
-            cost_belief=self.args.costs[1],
-            cost_heading=self.args.costs[2],
-            cost_pos=self.args.costs[3],
-            min_dist_between_entities=0.001,
-            dist_noise_scale_priv=self.args.dist_noise_scale_priv,
-            dist_noise_scale_soc=self.args.dist_noise_scale_soc,
+            **self.cfg
         )
 
     def init_env(self, env_transform=None):
@@ -99,7 +103,7 @@ class VmasEvaluator:
             base_env = self._make_env_fn(self.total_pop)
 
         if env_transform is not None:
-            # 2. Wrap the Main Env (keeps genes alive in the rollout loop)
+            # Wrap the Main Env
             return TransformedEnv(base_env, env_transform())
         else:
             return base_env
@@ -117,14 +121,14 @@ class VmasEvaluator:
             reshaped_genes = population_genes.view(
                 self.num_workers,
                 self.sub_batch_size,
-                self.args.n_agents,
+                self.cfg.n_agents,
                 N_CHANNELS
             )
             batch_size_shape = [self.num_workers, self.sub_batch_size]
         else:
             reshaped_genes = population_genes.view(
                 total_pop,
-                self.args.n_agents,
+                self.cfg.n_agents,
                 N_CHANNELS
             )
             batch_size_shape = [total_pop]
@@ -147,7 +151,7 @@ class VmasEvaluator:
         with torch.no_grad():
             env.reset(initial_tensordict)
             rollouts = env.rollout(
-                max_steps=self.args.episode_len,
+                max_steps=self.cfg.max_steps,
                 policy=policy,
                 tensordict=initial_tensordict,
                 auto_reset=True
@@ -174,22 +178,28 @@ class VmasEvaluator:
 class ExperimentLogger:
     """Handles visualization and WandB logging."""
 
-    def __init__(self, use_wandb: bool, args, save_fig: bool = False):
+    def __init__(self, use_wandb: bool, cfg, save_fig: bool = False):
         self.use_wandb = use_wandb
-        self.args = args
+        self.cfg = cfg
         self.save_fig = save_fig
         if self.use_wandb:
             self._init_wandb()
 
     def _init_wandb(self):
         wandb.login()
+        # Handle Hydra DictConfig or Argparse Namespace
+        if isinstance(self.cfg, DictConfig):
+            config_dict = OmegaConf.to_container(self.cfg, resolve=True)
+        else:
+            config_dict = vars(self.cfg)
+
         wandb.init(
-            project=self.args.project_name,
-            name=self.args.run_name + "-" + str(uuid.uuid4())[:8],
-            config=vars(self.args)
+            project=self.cfg.project_name,
+            name=self.cfg.run_name + "-" + str(uuid.uuid4())[:8],
+            config=config_dict
         )
 
-    def log_metrics(self, gen: int, fitness_tensor: torch.Tensor, steps_per_sec: float, islands: List[List[Any]]):
+    def log_metrics_ga(self, gen: int, fitness_tensor: torch.Tensor, steps_per_sec: float, islands: List[List[Any]]):
         # 1. Global Statistics (All Agents)
         global_mean = fitness_tensor.mean().item()
         global_median = fitness_tensor.median().item()
@@ -201,7 +211,7 @@ class ExperimentLogger:
         env_medians = fitness_tensor.median(dim=1).values
 
         # 3. Top-K Environments Statistics
-        top_k = self.args.top_k
+        top_k = self.cfg.top_k
         top_k_indices = torch.argsort(env_means, descending=True)[:top_k]
 
         # Get all agent rewards for the top k islands to compute aggregated stats
@@ -275,10 +285,27 @@ class ExperimentLogger:
             plt.savefig(f"parallel_plot_{gen:04d}.png", dpi=150, bbox_inches='tight')
         plt.close(fig)
 
+    def log_ternary_plot(self, plot_data: List[Dict[str, float]], resolution: int):
+        """
+        Generates and logs a ternary plot (Private vs Belief vs None).
+        Expected plot_data structure: [{'priv': 0.1, 'bel': 0.8, 'none': 0.1, 'score': 10.5}, ...]
+        """
+        fig = self._generate_ternary_plot_fig(plot_data, resolution)
+
+        if self.use_wandb:
+            wandb.log({"ternary_landscape": wandb.Image(fig)})
+
+        if self.save_fig:
+            fname = "ternary_exploration.png"
+            plt.savefig(fname, dpi=150, bbox_inches='tight')
+            print(f"Ternary plot saved to {fname}")
+
+        plt.close(fig)
+
     def _generate_heatmap_fig(self, islands, fitness_tensor):
         # 1. Select Top K
         island_means = fitness_tensor.mean(dim=1)
-        top_k = self.args.top_k
+        top_k = self.cfg.top_k
         top_k_indices = torch.argsort(island_means, descending=True)[:top_k].cpu().numpy()
         top_islands = [islands[i] for i in top_k_indices]
         # Extract the means for these islands (to use as labels)
@@ -287,7 +314,7 @@ class ExperimentLogger:
         # Extract logits -> probs
         all_genes = [ind for island in top_islands for ind in island]
         logits_tensor = torch.tensor(all_genes, dtype=torch.float32, device='cpu')
-        logits_tensor = logits_tensor.view(top_k, self.args.n_agents, N_CHANNELS)
+        logits_tensor = logits_tensor.view(top_k, self.cfg.n_agents, N_CHANNELS)
         probs_tensor = torch.softmax(logits_tensor, dim=2)
 
         # 2. Sort Agents
@@ -326,7 +353,7 @@ class ExperimentLogger:
         ax.set_xlabel("Information Channel")
 
         # Set Y-axis labels to be the fitness scores
-        n_agents = self.args.n_agents
+        n_agents = self.cfg.n_agents
         # Calculate centers for each island block
         y_ticks = np.arange(top_k) * n_agents + (n_agents / 2) - 0.5
         y_labels = [f"{int(mean)}" for mean in sorted_means.cpu().numpy()]
@@ -341,7 +368,7 @@ class ExperimentLogger:
         for i in range(heatmap_data.shape[0]):
             ax.axhline(y=i - 0.5, color='black', linewidth=0.2, alpha=0.1)
         for i in range(1, top_k):
-            ax.axhline(y=i * self.args.n_agents - 0.5, color='white', linewidth=1.5, alpha=0.8)
+            ax.axhline(y=i * self.cfg.n_agents - 0.5, color='white', linewidth=1.5, alpha=0.8)
 
         plt.tight_layout()
         return fig
@@ -349,7 +376,7 @@ class ExperimentLogger:
     def _generate_parallel_plot_fig(self, islands, fitness_tensor):
         # 1. Select Top K
         island_means = fitness_tensor.mean(dim=1)
-        top_k = self.args.top_k
+        top_k = self.cfg.top_k
         top_k_indices = torch.argsort(island_means, descending=True)[:top_k].cpu().numpy()
         top_islands = [islands[i] for i in top_k_indices]
 
@@ -386,11 +413,45 @@ class ExperimentLogger:
         ax.set_ylim(-0.05, 1.05)
         ax.grid(True, alpha=0.3)
         ax.legend(title="Group Rank", bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        return fig
 
+    def _generate_ternary_plot_fig(self, data: List[Dict[str, float]], resolution: int):
+        """
+        Internal method to generate the matplotlib figure for the ternary plot using mpltern.
+        """
+        import mpltern
+        # Extract components
+        priv = [item['priv'] for item in data]
+        bel = [item['bel'] for item in data]
+        none = [item['none'] for item in data]
+        scores = [item['score'] for item in data]
+
+        fig = plt.figure(figsize=(10, 8))
+        # Projection 'ternary' is provided by mpltern
+        ax = fig.add_subplot(projection='ternary')
+
+        # Order for mpltern is typically Top, Left, Right
+        # We map:
+        # Top = Belief
+        # Left = Private
+        # Right = None
+
+        # tricontourf(t, l, r, values)
+        cs = ax.tripcolor(bel, priv, none, scores, vmin=0, vmax=1, cmap="viridis", shading='flat')
+        # ax.grid(which="both", alpha=0.3)
+
+        cax = ax.inset_axes([1.05, 0.1, 0.05, 0.9], transform=ax.transAxes)
+        fig.colorbar(cs, label="Average Fitness", ticks=np.linspace(0, 1, 11), cax=cax)
+
+        ax.set_tlabel("Belief")
+        ax.set_llabel("Private")
+        ax.set_rlabel("None")
+
+        # ax.set_title(f"Channel Strategy Fitness Landscape\n(Grid Resolution: {resolution})")
         plt.tight_layout()
         return fig
 
     def finish(self):
         if self.use_wandb:
             wandb.finish()
-

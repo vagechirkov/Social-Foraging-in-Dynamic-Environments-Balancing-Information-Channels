@@ -1,0 +1,23 @@
+# Experiment
+project_name: "info_channels_ea"
+run_name: "omega_ea"
+seed: 42
+use_wandb: true
+use_gpu: false
+log_freq: 10
+
+# Genetic Algorithm / Exploration Settings
+ngen: 50
+pop_size: 100
+top_k: 10
+resolution: 10
+replicates: 5
+
+# Environment Parameters
+dim: 5
+n_agents: 10
+episode_len: 1000
+target_speed: 0.1
+costs: [1.0, 0.5, 0.25, 0.1] # [Priv, Belief, Heading, Pos]
+dist_noise_scale_priv: 2.0
+dist_noise_scale_soc: 2.0

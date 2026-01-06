@@ -140,7 +140,7 @@ def run_experiment():
 
         # 2. Log
         steps_per_sec = (total_pop_size * args.episode_len) / gen_duration
-        logger.log_metrics(gen_step, fitness_tensor, steps_per_sec, islands)
+        logger.log_metrics_ga(gen_step, fitness_tensor, steps_per_sec, islands)
 
         if gen % args.log_freq == 0 or gen_step == args.ngen:
             logger.log_heatmap(islands, fitness_tensor, gen_step)
