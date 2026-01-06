@@ -6,7 +6,7 @@ use_wandb: true
 use_gpu: false
 
 # exploration settings
-resolution: 40
+resolution: 20
 replicates: 10
 n_envs: ???
 
