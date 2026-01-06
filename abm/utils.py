@@ -438,8 +438,8 @@ class ExperimentLogger:
         # Right = None
 
         # tricontourf(t, l, r, values)
-        cs = ax.tripcolor(bel, priv, none, scores, vmin=0, vmax=1, cmap="viridis",
-                          shading='gouraud', rasterized=True)  # shading='flat'
+        #  shading='gouraud', rasterized=True
+        cs = ax.tripcolor(bel, priv, none, scores, vmin=0, vmax=1, cmap="viridis", shading='flat')
         # ax.grid(alpha=0.2)
         ax.grid(axis='t', color='w')
         ax.grid(axis='l', color='w', linestyle='--')
