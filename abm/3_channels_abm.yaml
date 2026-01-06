@@ -22,8 +22,8 @@ cost_priv: 0.0
 cost_belief: 0.0
 cost_heading: 0.0
 cost_pos: 0.0
-dist_noise_scale_priv: 1.0  # beta private
-dist_noise_scale_soc: 1.0  # beta belief
+dist_noise_scale_priv: 2.0  # beta private
+dist_noise_scale_soc: 2.0  # beta belief
 social_trans_scale: 1.0  # gamma belief
 
 

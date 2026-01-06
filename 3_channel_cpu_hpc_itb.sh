@@ -16,14 +16,14 @@ source .venv/bin/activate
 export PYTHONPATH=$PYTHONPATH:.
 
 t_speed=$1
-gamma_bel=$2
-beta_bel=$3
+cost_priv=$2
+cost_belief=$3
 
 python abm/3_channels_abm_exploration.py \
     --m n_agents=10 \
     max_steps=1000 \
     replicates=100 \
-    run_name="01_2026" \
+    run_name="costs" \
     target_speed="$t_speed" \
-    social_trans_scale="$gamma_bel" \
-    dist_noise_scale_soc="$beta_bel"
+    cost_priv="$cost_priv" \
+    cost_belief="$cost_belief"

@@ -1,13 +1,13 @@
 #!/bin/bash
 
 target_speed_array=(0.1 0.3 0.5)
-gamma_bel_array=(1.0 2.0 5.0)
-beta_bel_array=(1.0 0.1)
+cost_priv=(0.5 0.1 0.02)
+cost_belief=(0.5 0.1 0.02)
 
-for beta_bel in "${beta_bel_array[@]}"; do
-    for gamma_bel in "${gamma_bel_array[@]}"; do
-        for t_speed in "${target_speed_array[@]}"; do
-            sbatch 3_channel_cpu_hpc_itb.sh "$t_speed" "$gamma_bel" "$beta_bel"
+  for t_speed in "${target_speed_array[@]}"; do
+    for c_priv in "${cost_priv[@]}"; do
+        for c_bel in "${cost_belief[@]}"; do
+            sbatch 3_channel_cpu_hpc_itb.sh "$t_speed" "$c_priv" "$c_bel"
         done
     done
 done
