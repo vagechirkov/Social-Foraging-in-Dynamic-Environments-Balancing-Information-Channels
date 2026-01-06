@@ -19,7 +19,7 @@ t_speed=$1
 gamma_bel=$2
 beta_bel=$3
 
-uv run abm/3_channel_abm_exploration.py \
+uv run abm/3_channels_abm_exploration.py \
     --n_agents 10 \
     --max_steps 1000 \
     --replicates 100 \
