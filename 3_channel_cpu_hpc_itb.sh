@@ -21,7 +21,7 @@ cost_belief=$3
 
 python abm/3_channels_abm_exploration.py \
     --m n_agents=10 \
-    max_steps=2000 \
+    max_steps=1000 \
     replicates=500 \
     run_name="costs" \
     target_speed="$t_speed" \
