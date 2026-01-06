@@ -178,10 +178,10 @@ class VmasEvaluator:
 class ExperimentLogger:
     """Handles visualization and WandB logging."""
 
-    def __init__(self, use_wandb: bool, cfg, save_fig: bool = False):
+    def __init__(self, use_wandb: bool, cfg, save_fig_locally: bool = False):
         self.use_wandb = use_wandb
         self.cfg = cfg
-        self.save_fig = save_fig
+        self.save_fig = save_fig_locally
         if self.use_wandb:
             self._init_wandb()
 

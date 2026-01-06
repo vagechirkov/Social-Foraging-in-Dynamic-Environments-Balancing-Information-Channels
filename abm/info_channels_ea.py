@@ -113,7 +113,7 @@ def run_experiment():
     device = "cuda" if torch.cuda.is_available() and args.use_gpu else "cpu"
 
     # Initialize Modules
-    logger = ExperimentLogger(args.use_wandb, args, save_fig=True)
+    logger = ExperimentLogger(args.use_wandb, args, save_fig_locally=True)
     evaluator = VmasEvaluator(args, device)
     ga = GeneticAlgorithm(n_channels=5)
 

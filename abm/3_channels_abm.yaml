@@ -23,15 +23,15 @@ cost_belief: 0.0
 cost_heading: 0.0
 cost_pos: 0.0
 dist_noise_scale_priv: 2.0  # beta private
-dist_noise_scale_soc: 2.0  # beta belief
-social_trans_scale: 1.0  # gamma belief
+dist_noise_scale_soc: 0.0  # beta belief
+social_trans_scale: 0.0  # gamma belief
 
 
 # other params
 base_noise: 0.1
 process_noise_scale: 0.02
 momentum: 0.9
-initialization_box_ratio: 1
+initialization_box_ratio: 0.5
 min_dist_between_entities: 0.001
 agent_radius: 0.05
 continuous_actions: True

@@ -18,12 +18,17 @@ export PYTHONPATH=$PYTHONPATH:.
 t_speed=$1
 cost_priv=$2
 cost_belief=$3
+dim=$4
+n_agents=$5
+
 
 python abm/3_channels_abm_exploration.py \
-    --m n_agents=10 \
+    --m n_agents="$n_agents" \
     max_steps=1000 \
     replicates=500 \
     run_name="costs" \
     target_speed="$t_speed" \
     cost_priv="$cost_priv" \
-    cost_belief="$cost_belief"
+    cost_belief="$cost_belief" \
+    x_dim="$dim" \
+    y_dim="$dim"

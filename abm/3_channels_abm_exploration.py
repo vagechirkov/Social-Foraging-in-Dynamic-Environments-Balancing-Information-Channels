@@ -106,7 +106,7 @@ def run_exploration(cfg: DictConfig):
     print(f"Running evaluation with Population Size: {len(all_islands)} (Actual: {num_actual_sims} + Padding: {padding})")
 
     # Initialize Logger
-    logger = ExperimentLogger(cfg.use_wandb, cfg, save_fig=False)
+    logger = ExperimentLogger(cfg.use_wandb, cfg, save_fig_locally=False)
 
     # 4. Evaluate
     print("Starting simulation...")
