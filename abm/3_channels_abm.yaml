@@ -2,7 +2,7 @@
 project_name: "3_channels_abm"
 run_name: "ternary_exploration"
 seed: 42
-use_wandb: false
+use_wandb: true
 use_gpu: false
 
 # exploration settings
@@ -11,8 +11,8 @@ replicates: 10
 n_envs: ???
 
 # parameters
-x_dim: 3
-y_dim: 3
+x_dim: 5
+y_dim: 5
 n_agents: 10
 n_targets: 3
 targets_quality: "HT"
@@ -22,8 +22,8 @@ cost_priv: 0.0
 cost_belief: 0.0
 cost_heading: 0.0
 cost_pos: 0.0
-dist_noise_scale_priv: 2.0  # beta private
-dist_noise_scale_soc: 2.0  # beta belief
+dist_noise_scale_priv: 1.0  # beta private
+dist_noise_scale_soc: 1.0  # beta belief
 social_trans_scale: 1.0  # gamma belief
 
 
