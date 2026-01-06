@@ -190,11 +190,11 @@ class Scenario(BaseScenario):
     def process_action(self, agent: Agent):
         if self.is_interactive:
             probs = torch.zeros(5)
-            probs[0] = 0.1 # Private
-            probs[1] = 0.1 # Belief
-            probs[2] = 0.1 # Heading
-            probs[3] = 0.1 # Position
-            probs[4] = 0.6 # None (no update)
+            probs[0] = 0.9 # Private
+            probs[1] = 0.05 # Belief
+            probs[2] = 0.0 # Heading
+            probs[3] = 0.0 # Position
+            probs[4] = 0.05 # None (no update)
             agent.action.u = torch.distributions.Categorical(probs=probs).sample((agent.batch_dim, 1))
 
         if "agent" in agent.name and isinstance(agent, ForagingAgent):
@@ -323,7 +323,10 @@ if __name__ == "__main__":
             visualize_semidims=True,
             min_dist_between_entities=0.1,
             agent_radius=0.01,
-            max_speed=0.05
+            max_speed=0.05,
+            dist_noise_scale_priv=1.0,
+            dist_noise_scale_soc=1.0,
+            social_trans_scale=1.0
         ),
         control_two_agents=control_two_agents,
         display_info=display_info,

@@ -439,7 +439,7 @@ class ExperimentLogger:
 
         # tricontourf(t, l, r, values)
         cs = ax.tripcolor(bel, priv, none, scores, vmin=0, vmax=1, cmap="viridis", shading='flat')
-        # ax.grid(which="both", alpha=0.3)
+        ax.grid(alpha=0.2)
 
         cax = ax.inset_axes([1.05, 0.1, 0.05, 0.9], transform=ax.transAxes)
         fig.colorbar(cs, label="Average Fitness", ticks=np.linspace(0, 1, 11), cax=cax)
