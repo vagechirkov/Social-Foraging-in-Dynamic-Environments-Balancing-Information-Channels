@@ -7,7 +7,7 @@
 #SBATCH --nodes=1                                   # Ensure it runs on one node
 #SBATCH --ntasks=1                                  # Run a single task
 #SBATCH --cpus-per-task=64                          # Request 64 CPUs
-#SBATCH --mem=128G                                  # Memory allocation
+#SBATCH --mem=512G                                  # Memory allocation
 
 
 source .venv/bin/activate
