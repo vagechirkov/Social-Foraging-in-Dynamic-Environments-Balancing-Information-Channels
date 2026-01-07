@@ -260,7 +260,7 @@ class AgentObservations:
         # If Distance is small, it's either Redundant (we agree) or Useless (neighbor is lost, i.e. low precision).
         is_novel = dist_sq > agent.belief_selectivity_threshold
 
-        agent.obs_validity_mask[indices] = is_novel.squeeze(-1)
+        agent.obs_validity_mask[indices] = is_novel.any(dim=1)
 
         # 4. Construct Observations
 
