@@ -105,7 +105,7 @@ class ForagingAgent(Agent):
         self.obs_target_qual_var = torch.zeros(batch_dim, n_targets, device=device)
         # A boolean mask: True = Update this target, False = Skip (act as None)
         # Shape: (batch, n_targets)
-        self.obs_validity_mask = torch.ones(batch_dim, n_targets, device=device, dtype=torch.bool)
+        self.obs_validity_mask = torch.ones(batch_dim, device=device, dtype=torch.bool)
 
         # BELIEF STATE
         # Means mu_{i,k}: (batch, n_targets, 2)
@@ -566,83 +566,74 @@ def update_belief(agent: ForagingAgent):
 
 def compute_gradient(agent: ForagingAgent):
     """
-    Computes the gradient direction using the Log-Sum-Exp trick to prevent
-    underflow when the agent is far from all targets.
+    Fully vectorized gradient computation.
     """
     batch_dim = agent.batch_dim
     n_targets = agent.n_targets
     device = agent.device
 
-    pos = agent.state.pos  # (batch, 2)
+    # 1. Prepare Inputs for Broadcasting
+    # Pos: (batch, 2) -> (batch, n_targets, 2)
+    pos_expanded = agent.state.pos.unsqueeze(1).expand(-1, n_targets, -1)
 
-    # Storage for batch processing
-    # We will stack these later: (batch, n_targets, ...)
-    log_weights_list = []
-    grad_vectors_list = []
+    mu = agent.belief_target_pos          # (batch, n_targets, 2)
+    sigma = agent.belief_target_covariance # (batch, n_targets, 2, 2)
+    q = agent.belief_target_qual          # (batch, n_targets)
 
-    # 1. Collect gradient components for all targets
-    for k in range(n_targets):
-        mu = agent.belief_target_pos[:, k, :]       # (batch, 2)
-        sigma = agent.belief_target_covariance[:, k, :, :] # (batch, 2, 2)
-        q = agent.belief_target_qual[:, k]          # (batch,)
+    # 2. Calculate Difference Vector
+    diff = pos_expanded - mu # (batch, n_targets, 2)
 
-        try:
-            dist = MultivariateNormal(loc=mu, covariance_matrix=sigma)
+    # 3. Analytical Inverse of Sigma (Vectorized over targets)
+    sigma_inv = invert_2x2_matrix(sigma) # (batch, n_targets, 2, 2)
 
-            # A. Vector Term: -Sigma^{-1} (x - mu)
-            diff = pos - mu # (batch, 2)
+    # 4. Compute Gradient Component Vector: -Sigma^-1 @ diff
+    # We treat diff as a column vector: (batch, n_targets, 2, 1)
+    # Result: (batch, n_targets, 2, 1) -> squeeze to (batch, n_targets, 2)
+    grad_vectors = -torch.matmul(sigma_inv, diff.unsqueeze(-1)).squeeze(-1)
 
-            # Analytical Inverse
-            sigma_inv = invert_2x2_matrix(sigma)
+    # 5. Compute Log Probability (Manually, Vectorized)
+    # Formula: -0.5 * (log|Sigma| + (x-mu)^T Sigma^-1 (x-mu) + 2*log(2pi))
 
-            # grad_component vector: (batch, 2)
-            # -1 * (Sigma_inv @ diff)
-            term_vec = -1 * torch.matmul(sigma_inv, diff.unsqueeze(-1)).squeeze(-1)
-            grad_vectors_list.append(term_vec)
+    # A. Determinant
+    a = sigma[..., 0, 0]
+    b = sigma[..., 0, 1]
+    c = sigma[..., 1, 0]
+    d = sigma[..., 1, 1]
+    det = a * d - b * c
+    det_safe = torch.where(torch.abs(det) < 1e-6, torch.sign(det) * 1e-6, det)
+    log_det = torch.log(torch.abs(det_safe)) # (batch, n_targets)
 
-            # B. Scalar Weight in Log Space: log(q) + log_prob(x)
-            # Clamp q to avoid log(0)
-            log_q = torch.log(torch.clamp(q, min=1e-10))
-            log_prob = dist.log_prob(pos) # (batch,)
+    # B. Mahalanobis Distance
+    # (x-mu)^T * Sigma^-1 * (x-mu)
+    # Since grad_vectors = -Sigma^-1 * (x-mu),
+    # Mahalanobis = (x-mu) * (-grad_vectors)
+    # Dot product sum over dim 2
+    mahalanobis = -(diff * grad_vectors).sum(dim=2) # (batch, n_targets)
 
-            log_weights_list.append(log_q + log_prob)
+    # C. Final Log Prob
+    log_2pi = 1.837877
+    log_prob = -0.5 * (log_det + mahalanobis + 2 * log_2pi)
 
-        except ValueError:
-            # Handle degenerate covariance matrices by providing zero-influence placeholders
-            grad_vectors_list.append(torch.zeros_like(pos))
-            log_weights_list.append(torch.ones(batch_dim, device=device) * -1e9)
+    # 6. Weighting
+    log_q = torch.log(torch.clamp(q, min=1e-10))
+    log_weights = log_q + log_prob # (batch, n_targets)
 
-    # 2. Stack to Create Tensors
-    # shape: (batch, n_targets)
-    log_weights = torch.stack(log_weights_list, dim=1)
-    # shape: (batch, n_targets, 2)
-    grad_vectors = torch.stack(grad_vectors_list, dim=1)
-
-    # 3. Apply Log-Sum-Exp Trick for Direction
-    # Find max log-weight for stability: L_max
-    # (batch, 1)
+    # 7. Log-Sum-Exp Trick (Vectorized)
+    # Find max over targets dim
     max_log_weights, _ = torch.max(log_weights, dim=1, keepdim=True)
 
-    # Subtract L_max from all weights before exp: e^(L_i - L_max)
-    # This ensures the largest weight is e^0 = 1, preventing underflow to all-zeros
+    # Exponentials
     stable_coeffs = torch.exp(log_weights - max_log_weights) # (batch, n_targets)
 
-    # 4. Compute Weighted Sum Vector
-    # sum_k ( coeff_k * vec_k )
-    # (batch, n_targets, 1) * (batch, n_targets, 2) -> sum over dim 1
+    # Weighted Sum of Gradient Vectors
+    # (batch, n_targets, 1) * (batch, n_targets, 2) -> sum over n_targets
     total_grad_direction = (stable_coeffs.unsqueeze(-1) * grad_vectors).sum(dim=1)
 
-    # 5. Normalize
-    # The magnitude of total_grad_direction is meaningless (scaled by e^-L_max),
-    # but the direction is the correct gradient direction.
+    # 8. Normalize and Update
     grad_norm = torch.norm(total_grad_direction, dim=1, keepdim=True)
-
-    # Robust normalization
     grad_norm = torch.clamp(grad_norm, min=1e-6)
     direction = total_grad_direction / grad_norm
 
-    # 6. Update Agent Velocity
-    # v_new = alpha * v_old + (1 - alpha) * v_target
     agent.state.vel = agent.momentum * agent.state.vel + (1 - agent.momentum) * direction * agent.max_speed
 
 
