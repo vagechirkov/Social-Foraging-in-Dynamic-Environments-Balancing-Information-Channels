@@ -8,6 +8,36 @@ from vmas.simulator.utils import X, Y
 from torch.distributions import MultivariateNormal
 
 
+def invert_2x2_matrix(matrix: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    Computes the analytical inverse of a batch of 2x2 matrices.
+    Input: (..., 2, 2)
+    Output: (..., 2, 2)
+    """
+    # Extract components
+    a = matrix[..., 0, 0]
+    b = matrix[..., 0, 1]
+    c = matrix[..., 1, 0]
+    d = matrix[..., 1, 1]
+
+    # Determinant
+    det = a * d - b * c
+
+    # Safe Inverse of Determinant
+    det_safe = torch.where(torch.abs(det) < eps, torch.sign(det) * eps, det)
+    det_inv = 1.0 / det_safe
+
+    # Construct Inverse Matrix
+    # [[d, -b], [-c, a]] * (1/det)
+    inv_matrix = torch.empty_like(matrix)
+    inv_matrix[..., 0, 0] = d * det_inv
+    inv_matrix[..., 0, 1] = -b * det_inv
+    inv_matrix[..., 1, 0] = -c * det_inv
+    inv_matrix[..., 1, 1] = a * det_inv
+
+    return inv_matrix
+
+
 class ForagingAgent(Agent):
     def __init__(
             self,
@@ -213,20 +243,16 @@ class AgentObservations:
         # shape: (batch, n_targets, 2)
         delta = agent.belief_target_pos[indices] - neighbor_belief_pos
 
-        # B. Invert Neighbor Covariance
-        # We check if *our* mean is surprising given *their* uncertainty.
-        try:
-            neigh_cov_inv = torch.linalg.inv(neighbor_belief_cov)
-        except RuntimeError:
-            neigh_cov_inv = torch.linalg.pinv(neighbor_belief_cov)
+        # B. Invert Neighbor Covariance (Analytical Inverse)
+        neigh_cov_inv = invert_2x2_matrix(neighbor_belief_cov)
 
-        # C. Calculate Mahalanobis Distance Squared: delta^T * Sigma^-1 * delta
-        # dimensions: (batch, targets, 1, 2) @ (batch, targets, 2, 2) @ (batch, targets, 2, 1)
+        # C. Mahalanobis Distance: delta^T @ Sigma^-1 @ delta
+        # (batch, n_targets, 1, 2) @ (batch, n_targets, 2, 2) @ (batch, n_targets, 2, 1)
 
-        # term1: Sigma^-1 * delta
+        # term1 = Sigma^-1 @ delta
         term1 = torch.matmul(neigh_cov_inv, delta.unsqueeze(-1))
 
-        # dist_sq: delta^T * term1
+        # dist_sq = delta^T @ term1
         dist_sq = torch.matmul(delta.unsqueeze(-2), term1).squeeze(-1).squeeze(-1)
 
         # D. The Gate
@@ -497,14 +523,9 @@ def update_belief(agent: ForagingAgent):
     # Innovation Covariance S = Sigma_t + R_k
     S = sigma_t + R_k
 
-    # K = Sigma_t * S^-1
-    try:
-        S_inv = torch.linalg.inv(S)
-        K = torch.matmul(sigma_t, S_inv)
-    except RuntimeError:
-        # Fallback for singular matrices
-        S_inv = torch.linalg.pinv(S)
-        K = torch.matmul(sigma_t, S_inv)
+    # Calculate Kalman Gain K = Sigma_t @ S^-1
+    S_inv = invert_2x2_matrix(S)
+    K = torch.matmul(sigma_t, S_inv)
 
     # 2. Update Mean
     # Innovation y = z_k - mu_t
@@ -571,11 +592,8 @@ def compute_gradient(agent: ForagingAgent):
             # A. Vector Term: -Sigma^{-1} (x - mu)
             diff = pos - mu # (batch, 2)
 
-            # Robust inverse
-            try:
-                sigma_inv = torch.linalg.inv(sigma)
-            except RuntimeError:
-                sigma_inv = torch.linalg.pinv(sigma)
+            # Analytical Inverse
+            sigma_inv = invert_2x2_matrix(sigma)
 
             # grad_component vector: (batch, 2)
             # -1 * (Sigma_inv @ diff)

@@ -25,8 +25,8 @@ belief_selectivity_array=$7
 
 python abm/3_channels_abm_exploration.py \
     --m n_agents="$n_agents" \
-    max_steps=1000 \
-    replicates=500 \
+    max_steps=5000 \
+    replicates=100 \
     run_name="costs" \
     target_speed="$t_speed" \
     cost_priv="$cost_priv" \
