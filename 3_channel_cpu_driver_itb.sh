@@ -1,6 +1,6 @@
 #!/bin/bash
 
-belief_selectivity_array=(0.1 2.0 4.0 6.0)
+belief_selectivity_array=(2.0 4.0)
 gamma_belief_array=(1)
 dim_array=(5)  # 10 15
 n_agent_array=(10)  # 20 30

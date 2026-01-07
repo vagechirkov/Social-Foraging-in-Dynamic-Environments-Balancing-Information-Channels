@@ -4,7 +4,7 @@ import math
 import numpy as np
 import torch
 import hydra
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 from utils import VmasEvaluator, GenePersistenceTransform, SimpleAgent, ExperimentLogger
 

@@ -5,7 +5,6 @@ import torch
 from vmas.simulator.core import Agent
 from vmas.simulator.dynamics.common import Dynamics
 from vmas.simulator.utils import X, Y
-from torch.distributions import MultivariateNormal
 
 
 def invert_2x2_matrix(matrix: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
