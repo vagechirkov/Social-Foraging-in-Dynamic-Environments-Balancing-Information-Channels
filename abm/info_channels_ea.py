@@ -72,7 +72,7 @@ class GeneticAlgorithm:
         for island in islands:
             # 1. Save Elites (e.g., Top 20%)
             n_elites = int(len(island) * 0.2)
-            elites = tools.selBest(island, k=int(len(island) * 0.2))
+            elites = tools.selBest(island, k=n_elites)
             elites = list(map(self.toolbox.clone, elites)) # Clone to protect from mutation
 
             # 2. Select Parents for the rest
@@ -88,6 +88,41 @@ class GeneticAlgorithm:
             next_gen_islands.append(elites + offspring)
 
         return next_gen_islands
+
+    def migrate_islands(self, islands: List[List[Any]], n_migrants: int = 1):
+        """
+        Performs a Ring Migration strategy.
+        Elites from Island I are copied to Island I+1, replacing the worst individuals there.
+        """
+        pop_size = len(islands)
+        if pop_size < 2:
+            return islands
+
+        # 1. Select elites from each island to be migrants
+        migrants_per_island = []
+        for i in range(pop_size):
+            # Select top n_migrants
+            elites = tools.selBest(islands[i], n_migrants)
+            # Clone them deeply so they don't reference the original island
+            migrants_per_island.append([self.toolbox.clone(ind) for ind in elites])
+
+        # 2. Inject migrants into the next island in the ring
+        for i in range(pop_size):
+            target_idx = (i + 1) % pop_size
+            target_island = islands[target_idx]
+            source_migrants = migrants_per_island[i]
+
+            # Sort target island by fitness (Descending: Best -> Worst)
+            # We assume fitness values are already calculated/valid from the evaluation step
+            target_island.sort(key=lambda x: x.fitness.values, reverse=True)
+
+            # Replace the worst individuals (at the end of the list) with the incoming migrants
+            # Note: We replace in-place
+            for j in range(n_migrants):
+                # Replace the (j+1)-th worst individual
+                target_island[-(j+1)] = source_migrants[j]
+
+        return islands
 
 
 @hydra.main(version_base=None, config_path=".", config_name="ea_evaluation")
@@ -128,6 +163,8 @@ def run_experiment(cfg: DictConfig):
         with torch.no_grad():
             fitness_tensor = evaluator.evaluate(env, islands)
         gen_duration = time.time() - gen_start
+        max_possible_score = cfg.max_steps * 1.75 if cfg.targets_quality == "HT" else cfg.max_steps
+        fitness_tensor = fitness_tensor / max_possible_score
 
         # 2. Log
         steps_per_sec = (total_pop_size * cfg.max_steps * cfg.n_agents) / gen_duration
@@ -141,6 +178,10 @@ def run_experiment(cfg: DictConfig):
         # 3. Evolve
         if gen_step < cfg.ngen:
             islands = ga.evolve_population(islands, gen)
+
+            if gen_step % cfg.migration_freq == 0:
+                print(f"--> Migrating {cfg.n_migrants} elites between {len(islands)} islands...")
+                ga.migrate_islands(islands, n_migrants=cfg.n_migrants)
 
     total_time = time.time() - start_time
     print(f"Evolution Complete. Total time: {total_time:.2f}s")

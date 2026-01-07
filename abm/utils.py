@@ -405,7 +405,7 @@ class ExperimentLogger:
         n_agents = self.cfg.n_agents
         # Calculate centers for each island block
         y_ticks = np.arange(top_k) * n_agents + (n_agents / 2) - 0.5
-        y_labels = [f"{int(mean)}" for mean in sorted_means.cpu().numpy()]
+        y_labels = [f"{mean:.2f}" for mean in sorted_means.cpu().numpy()]
 
         ax.set_yticks(y_ticks)
         ax.set_yticklabels(y_labels)

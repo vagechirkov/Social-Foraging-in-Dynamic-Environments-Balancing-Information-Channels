@@ -2,16 +2,16 @@
 project_name: "info_channels_ea_3_channels"
 run_name: "omega_3_ea"
 seed: 42
-use_wandb: false
-use_gpu: false
+use_wandb: true
+use_gpu: true
 log_freq: 10
 
 # Genetic Algorithm / Exploration Settings
 ngen: 50
 n_envs: 100
 top_k: 10
-resolution: 10
-replicates: 5
+migration_freq: 5
+n_migrants: 2
 
 # parameters
 x_dim: 5
@@ -20,7 +20,7 @@ n_agents: 10
 n_targets: 1
 targets_quality: "HM"
 max_steps: 100
-target_speed: 0.1
+target_speed: 0.3
 cost_priv: 0.9
 cost_belief: 0.05
 cost_heading: 0.0

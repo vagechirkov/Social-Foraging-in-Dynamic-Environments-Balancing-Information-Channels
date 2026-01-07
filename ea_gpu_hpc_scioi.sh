@@ -29,16 +29,13 @@ dim=$2
 
 # uv run
 python abm/info_channels_ea.py \
-    --n_agents 50 \
-    --target_speed "$t_speed" \
-    --episode_len 1000 \
-    --pop_size 100 \
-    --ngen 1000 \
-    --top_k 5 \
-    --dim "$dim" \
-    --costs 0.05 0.02 0.01 0.005 \
-    --use_wandb \
-    --use_gpu \
-    --run_name "init_explor" \
-    --dist_noise_scale_priv 2.0 \
-    --dist_noise_scale_soc 0.1
+    --m n_agents=30 \
+    target_speed="$t_speed" \
+    x_dim="$dim" \
+    y_dim="$dim" \
+    max_steps=5000 \
+    n_envs=100 \
+    ngen=2000 \
+    top_k=10 \
+    migration_freq=10 \
+    n_migrants=3

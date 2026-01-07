@@ -1,6 +1,6 @@
 #!/bin/bash
 
-dims_array=(15 10 5)
+dims_array=(5)
 target_speed_array=(0.05 0.1 0.3 0.5)
 
 for dim in "${dims_array[@]}"; do
