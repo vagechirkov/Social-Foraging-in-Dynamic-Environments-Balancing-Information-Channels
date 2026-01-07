@@ -25,6 +25,7 @@ cost_pos: 0.0
 dist_noise_scale_priv: 2.0  # beta private
 dist_noise_scale_soc: 0.0  # beta belief
 social_trans_scale: 0.0  # gamma belief
+belief_selectivity_threshold: 3.0  # Mahalanobis distance
 
 
 # other params

@@ -22,6 +22,7 @@ class ForagingAgent(Agent):
             social_trans_scale: float = 1.0,  # Scaling for Belief Transfer
             social_pos_scale: float = 5.0,  # Scaling for Positional Proxy
             social_heading_scale: float = 5.0,  # Scaling for Heading Heuristic
+            belief_selectivity_threshold: float = 3.0, # Mahalanobis distance threshold, std squared
             # --- Physics ---
             momentum: float = 0.9,  # alpha: Gradient smoothing
             # --- Information usage costs ---
@@ -47,6 +48,7 @@ class ForagingAgent(Agent):
         self.base_sigma_trans = base_noise * social_trans_scale
         self.base_sigma_pos = base_noise * social_pos_scale
         self.base_sigma_heading = base_noise * social_heading_scale
+        self.belief_selectivity_threshold = belief_selectivity_threshold
 
         # 3. Energy Costs Vector [Priv, Belief, Heading, Pos, None]
         # Used for reward calculation/energy expenditure tracking
@@ -71,6 +73,9 @@ class ForagingAgent(Agent):
         self.obs_target_qual = torch.zeros(batch_dim, n_targets, device=device)
         # Quality Variance R_{q,k}: (batch, n_targets)
         self.obs_target_qual_var = torch.zeros(batch_dim, n_targets, device=device)
+        # A boolean mask: True = Update this target, False = Skip (act as None)
+        # Shape: (batch, n_targets)
+        self.obs_validity_mask = torch.ones(batch_dim, n_targets, device=device, dtype=torch.bool)
 
         # BELIEF STATE
         # Means mu_{i,k}: (batch, n_targets, 2)
@@ -202,6 +207,34 @@ class AgentObservations:
         # Sigma_trans(d_ij)
         sigma_trans = agent.base_sigma_trans + agent.dist_noise_scale_soc * d_ij
         var_trans = sigma_trans ** 2 # (batch,)
+
+        # SELECTIVITY TO SOCIAL INFO
+        # A. Calculate Difference Vector (Delta)
+        # shape: (batch, n_targets, 2)
+        delta = agent.belief_target_pos[indices] - neighbor_belief_pos
+
+        # B. Invert Neighbor Covariance
+        # We check if *our* mean is surprising given *their* uncertainty.
+        try:
+            neigh_cov_inv = torch.linalg.inv(neighbor_belief_cov)
+        except RuntimeError:
+            neigh_cov_inv = torch.linalg.pinv(neighbor_belief_cov)
+
+        # C. Calculate Mahalanobis Distance Squared: delta^T * Sigma^-1 * delta
+        # dimensions: (batch, targets, 1, 2) @ (batch, targets, 2, 2) @ (batch, targets, 2, 1)
+
+        # term1: Sigma^-1 * delta
+        term1 = torch.matmul(neigh_cov_inv, delta.unsqueeze(-1))
+
+        # dist_sq: delta^T * term1
+        dist_sq = torch.matmul(delta.unsqueeze(-2), term1).squeeze(-1).squeeze(-1)
+
+        # D. The Gate
+        # If Distance > Threshold, the info is "Surprising/Novel" (Useful).
+        # If Distance is small, it's either Redundant (we agree) or Useless (neighbor is lost, i.e. low precision).
+        is_novel = dist_sq > agent.belief_selectivity_threshold
+
+        agent.obs_validity_mask[indices] = is_novel
 
         # 4. Construct Observations
 
@@ -387,6 +420,9 @@ def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: Li
     Collects observations based on agent.action.u[:, 0].
     Channels: 0: Priv, 1: Belief, 2: Heading, 3: Pos, 4: None
     """
+    # reset validity mask
+    agent.obs_validity_mask[:] = True
+    # get the most recent actions
     channel_indices = agent.action.u[:, 0].long()
 
     if len(other_agents) != 0:
@@ -441,7 +477,7 @@ def update_belief(agent: ForagingAgent):
     """
     # 1. Identify agents to update
     # Channels: 0: Private, 1: Belief, 2: Heading, 3: Pos, 4: None
-    update_mask = (agent.action.u[:, 0].long() != 4)
+    update_mask = (agent.action.u[:, 0].long() != 4) & agent.obs_validity_mask
     update_indices = torch.nonzero(update_mask).flatten()
 
     if update_indices.numel() == 0:

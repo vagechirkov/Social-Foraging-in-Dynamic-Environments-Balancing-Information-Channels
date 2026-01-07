@@ -72,6 +72,7 @@ class Scenario(BaseScenario):
 
             "dist_noise_scale_priv": kwargs.pop("dist_noise_scale_priv", 2.0),
             "dist_noise_scale_soc": kwargs.pop("dist_noise_scale_soc", 2.0),
+            "belief_selectivity_threshold": kwargs.pop("belief_selectivity_threshold", 1.0),
 
             "process_noise_scale": kwargs.pop("process_noise_scale", 0.02),
             "momentum": kwargs.pop("momentum", 0.9),

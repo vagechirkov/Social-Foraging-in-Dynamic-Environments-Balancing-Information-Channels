@@ -21,6 +21,7 @@ cost_belief=$3
 dim=$4
 n_agents=$5
 gamma_belief=$6
+belief_selectivity_array=$7
 
 python abm/3_channels_abm_exploration.py \
     --m n_agents="$n_agents" \
@@ -32,4 +33,5 @@ python abm/3_channels_abm_exploration.py \
     cost_belief="$cost_belief" \
     x_dim="$dim" \
     y_dim="$dim" \
-    social_trans_scale="$gamma_belief"
+    social_trans_scale="$gamma_belief" \
+    belief_selectivity_threshold="$belief_selectivity_array"
