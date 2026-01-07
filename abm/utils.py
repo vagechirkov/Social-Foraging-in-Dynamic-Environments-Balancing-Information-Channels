@@ -1,6 +1,6 @@
 import multiprocessing
 import uuid
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Optional
 
 import numpy as np
 import torch
@@ -178,10 +178,12 @@ class VmasEvaluator:
 class ExperimentLogger:
     """Handles visualization and WandB logging."""
 
-    def __init__(self, use_wandb: bool, cfg, save_fig_locally: bool = False):
+    def __init__(self, use_wandb: bool, cfg, save_fig_locally: bool = False,
+                 frozen_indices: Optional[List[int]] = None):
         self.use_wandb = use_wandb
         self.cfg = cfg
         self.save_fig = save_fig_locally
+        self.frozen_indices = frozen_indices if frozen_indices is not None else []
         if self.use_wandb:
             self._init_wandb()
 
@@ -276,6 +278,45 @@ class ExperimentLogger:
             plt.savefig(f"heatmap_gen_{gen:04d}.png", dpi=150, bbox_inches='tight')
         plt.close(fig)
 
+    def log_ternary_density(self, islands, fitness_tensor, gen):
+        """
+        Generates ternary density plots (heatmaps) of individual strategies
+        for both the Top K groups and the entire population.
+        Requires exactly 3 active (non-frozen) channels.
+        """
+        active_indices = [i for i in range(N_CHANNELS) if i not in self.frozen_indices]
+
+        if len(active_indices) != 3:
+            return
+
+        # 1. Plot All Agents
+        all_agents = [ind for island in islands for ind in island]
+        fig_all = self._generate_ternary_density_fig(all_agents, len(islands), active_indices,
+                                                     "All Agents Strategy Density")
+
+        # 2. Plot Top K Agents
+        island_means = fitness_tensor.mean(dim=1)
+        top_k = self.cfg.top_k
+        top_k_indices = torch.argsort(island_means, descending=True)[:top_k].cpu().numpy()
+        top_islands = [islands[i] for i in top_k_indices]
+        top_k_agents = [ind for island in top_islands for ind in island]
+
+        fig_top = self._generate_ternary_density_fig(top_k_agents, top_k, active_indices,
+                                                     f"Top {len(top_islands)} Groups Strategy Density")
+
+        if self.use_wandb:
+            wandb.log({
+                "ternary_density_all": wandb.Image(fig_all),
+                "ternary_density_top_k": wandb.Image(fig_top)
+            }, step=gen)
+
+        if self.save_fig:
+            fig_all.savefig(f"ternary_all_gen_{gen:04d}.png", dpi=150, bbox_inches='tight')
+            fig_top.savefig(f"ternary_top_k_gen_{gen:04d}.png", dpi=150, bbox_inches='tight')
+
+        plt.close(fig_all)
+        plt.close(fig_top)
+
     def log_parallel_plot(self, islands, fitness_tensor, gen):
         """Generates and logs the parallel coordinate plot for Top K islands."""
         fig = self._generate_parallel_plot_fig(islands, fitness_tensor)
@@ -319,9 +360,13 @@ class ExperimentLogger:
 
         # 2. Sort Agents
         sort_order_indices = [3, 2, 1, 4, 0] # Reverse priority: Pos, Heading, Belief, None, Priv
+
+        # Filter out frozen indices from sorting logic to avoid noise
+        active_sort_indices = [idx for idx in sort_order_indices if idx not in self.frozen_indices]
+
         sorted_agents_tensor = probs_tensor.clone()
 
-        for channel_idx in sort_order_indices:
+        for channel_idx in active_sort_indices:
             values = sorted_agents_tensor[:, :, channel_idx]
             values_rounded = torch.round(values * 10) / 10
             sort_idx = torch.argsort(values_rounded, dim=1, descending=True, stable=True)
@@ -342,14 +387,18 @@ class ExperimentLogger:
         sorted_means = top_k_means
 
         # 4. Plot
-        heatmap_data = final_tensor.view(-1, N_CHANNELS).numpy()
+        active_indices = [i for i in range(N_CHANNELS) if i not in self.frozen_indices]
+        filtered_tensor = final_tensor[:, :, active_indices]
+        filtered_names = [CHANNEL_NAMES[i] for i in active_indices]
+
+        heatmap_data = filtered_tensor.view(-1, len(active_indices)).numpy()
 
         fig, ax = plt.subplots(figsize=(10, 8))
         im = ax.imshow(heatmap_data, aspect='auto', cmap='viridis', vmin=0, vmax=1, interpolation='nearest')
 
-        fig.colorbar(im, label="Selection Probability")
-        ax.set_xticks(np.arange(N_CHANNELS))
-        ax.set_xticklabels(CHANNEL_NAMES)
+        fig.colorbar(im, label="Fitness")
+        ax.set_xticks(np.arange(len(active_indices)))
+        ax.set_xticklabels(filtered_names)
         ax.set_xlabel("Information Channel")
 
         # Set Y-axis labels to be the fitness scores
@@ -380,6 +429,10 @@ class ExperimentLogger:
         top_k_indices = torch.argsort(island_means, descending=True)[:top_k].cpu().numpy()
         top_islands = [islands[i] for i in top_k_indices]
 
+        # Determine active channels for plotting
+        active_indices = [i for i in range(N_CHANNELS) if i not in self.frozen_indices]
+        filtered_names = [CHANNEL_NAMES[i] for i in active_indices]
+
         # Gather genes from Top K islands
         all_genes = [ind for island in top_islands for ind in island]
         final_tensor = torch.tensor(all_genes, dtype=torch.float32, device='cpu')
@@ -400,9 +453,12 @@ class ExperimentLogger:
             # Calculate Probabilities [N_AGENTS, N_CHANNELS]
             island_probs = torch.softmax(island_tensor.view(-1, N_CHANNELS), dim=1).numpy()
 
+            # Filter out frozen columns
+            filtered_probs = island_probs[:, active_indices]
+
             # Plot lines for this island with a specific color
             # We use a distinct color for the group and add a label for the legend
-            ax.plot(CHANNEL_NAMES, island_probs.T, color=colors[i], alpha=0.2, linewidth=1)
+            ax.plot(filtered_names, filtered_probs.T, color=colors[i], alpha=0.2, linewidth=1)
 
             # Add a dummy line with the same color for the legend (to avoid multiple entries)
             ax.plot([], [], color=colors[i], label=f"Rank {i+1}")
@@ -413,6 +469,55 @@ class ExperimentLogger:
         ax.set_ylim(-0.05, 1.05)
         ax.grid(True, alpha=0.3)
         ax.legend(title="Group Rank", bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        return fig
+
+    def _generate_ternary_density_fig(self, agents, n_islands, active_indices, title):
+        """Generates a ternary density plot (hexbin) for a list of individual agents."""
+        import mpltern
+
+        # Extract Genes -> Logits -> Probs
+        logits = torch.tensor(agents, dtype=torch.float32, device='cpu')
+
+        # Softmax over all channels first to get true probabilities relative to everything
+        logits_tensor = logits.view(n_islands, self.cfg.n_agents, N_CHANNELS)
+        probs_tensor = torch.softmax(logits_tensor, dim=2)
+
+        # Extract active
+        probs_active = probs_tensor[:, :, active_indices]
+        vals = probs_active.view(n_islands * self.cfg.n_agents, 3).numpy()
+
+        # Order for mpltern is typically Top, Left, Right
+        # We assign:
+        # Top   = Index 1 in active list
+        # Left  = Index 0
+        # Right = Index 2
+        t = vals[:, 1]
+        l = vals[:, 0]
+        r = vals[:, 2]
+
+        labels = [CHANNEL_NAMES[i] for i in active_indices]
+
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(projection='ternary')
+
+        # Hexbin density
+        # gridsize determines resolution of hexagons
+        hb = ax.hexbin(t, l, r, gridsize=10)
+        # ax.scatter(t, l, r)
+
+        ax.set_tlabel(labels[1])
+        ax.set_llabel(labels[0])
+        ax.set_rlabel(labels[2])
+
+        ax.grid(axis='t', color='gray', alpha=0.5)
+        ax.grid(axis='l', color='gray', linestyle='--', alpha=0.5)
+        ax.grid(axis='r', color='gray', linestyle=':', alpha=0.5)
+
+        cb = fig.colorbar(hb, ax=ax, shrink=0.8)
+        cb.set_label('Agent Count')
+
+        ax.set_title(title)
         plt.tight_layout()
         return fig
 

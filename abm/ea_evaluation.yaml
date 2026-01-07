@@ -1,23 +1,41 @@
 # Experiment
-project_name: "info_channels_ea"
-run_name: "omega_ea"
+project_name: "info_channels_ea_3_channels"
+run_name: "omega_3_ea"
 seed: 42
-use_wandb: true
+use_wandb: false
 use_gpu: false
 log_freq: 10
 
 # Genetic Algorithm / Exploration Settings
 ngen: 50
-pop_size: 100
+n_envs: 100
 top_k: 10
 resolution: 10
 replicates: 5
 
-# Environment Parameters
-dim: 5
+# parameters
+x_dim: 5
+y_dim: 5
 n_agents: 10
-episode_len: 1000
+n_targets: 1
+targets_quality: "HM"
+max_steps: 100
 target_speed: 0.1
-costs: [1.0, 0.5, 0.25, 0.1] # [Priv, Belief, Heading, Pos]
-dist_noise_scale_priv: 2.0
-dist_noise_scale_soc: 2.0
+cost_priv: 0.9
+cost_belief: 0.05
+cost_heading: 0.0
+cost_pos: 0.0
+dist_noise_scale_priv: 2.0  # beta private
+dist_noise_scale_soc: 0.0  # beta belief
+social_trans_scale: 1.0  # gamma belief
+belief_selectivity_threshold: 2.0  # Mahalanobis distance
+
+
+# other params
+base_noise: 0.1
+process_noise_scale: 0.05
+momentum: 0.9
+initialization_box_ratio: 0.5
+min_dist_between_entities: 0.001
+agent_radius: 0.05
+continuous_actions: True

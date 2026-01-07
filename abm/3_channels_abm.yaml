@@ -2,7 +2,7 @@
 project_name: "3_channels_abm"
 run_name: "ternary_exploration"
 seed: 42
-use_wandb: true
+use_wandb: false
 use_gpu: false
 
 # exploration settings

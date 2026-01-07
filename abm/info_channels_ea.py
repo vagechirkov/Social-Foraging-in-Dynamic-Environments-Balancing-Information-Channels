@@ -1,12 +1,13 @@
-import argparse
 import random
 import time
 from typing import Any, List
 
+import hydra
 import numpy as np
 import torch
 import wandb
 from deap import base, creator, tools
+from omegaconf import DictConfig
 
 from abm.utils import ExperimentLogger, GenePersistenceTransform, VmasEvaluator
 
@@ -19,23 +20,41 @@ creator.create("Individual", list, fitness=creator.FitnessMax)
 class GeneticAlgorithm:
     """Handles all Evolutionary Computation logic (DEAP)."""
 
-    def __init__(self, n_channels: int, sigma_init: float = 0.2, mutation_prob: float = 0.2):
+    def __init__(self, n_channels: int, frozen_indices: List[int] = None, sigma_init: float = 0.2, mutation_prob: float = 0.2):
         self.n_channels = n_channels
+        self.frozen_indices = set(frozen_indices) if frozen_indices else set()
         self.sigma_init = sigma_init
         self.mutation_prob = mutation_prob
         self.toolbox = base.Toolbox()
         self._setup_toolbox()
 
+    def _create_individual(self):
+        """Creates an individual with frozen indices initialized to 0."""
+        genotype = []
+        for i in range(self.n_channels):
+            if i in self.frozen_indices:
+                genotype.append(-100)  # very low probability
+            else:
+                genotype.append(random.uniform(-1, 1))
+        return creator.Individual(genotype)
+
     def _setup_toolbox(self):
         """Registers DEAP genetic operators."""
-        self.toolbox.register("attr_float", random.uniform, -1, 1)
-        self.toolbox.register("individual", tools.initRepeat, creator.Individual,
-                              self.toolbox.attr_float, n=self.n_channels)
+        self.toolbox.register("individual", self._create_individual)
         self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
         self.toolbox.register("select", tools.selTournament, tournsize=3)
         # Mutation sigma is dynamic, so we register the base function here
         # but call it with specific arguments in the loop if needed,
         # or re-register it dynamically.
+
+    def _mutate(self, individual, mu, sigma, indpb):
+        """Custom Gaussian mutation that respects frozen indices."""
+        for i in range(len(individual)):
+            if i in self.frozen_indices:
+                continue
+            if random.random() < indpb:
+                individual[i] += random.gauss(mu, sigma)
+        return individual,
 
     def create_population(self, pop_size: int, n_agents: int) -> List[List[Any]]:
         """Creates a list of islands (populations)."""
@@ -47,7 +66,7 @@ class GeneticAlgorithm:
         current_sigma = self.sigma_init * (0.999 ** generation)
 
         # Re-register mutation with new sigma
-        self.toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=current_sigma, indpb=0.2)
+        self.toolbox.register("mutate", self._mutate, mu=0, sigma=current_sigma, indpb=0.2)
 
         next_gen_islands = []
         for island in islands:
@@ -71,65 +90,37 @@ class GeneticAlgorithm:
         return next_gen_islands
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Evolutionary Optimization for VMAS Agents")
-
-    # Experiment
-    parser.add_argument("--project_name", type=str, default="info_channels_ea",
-                        help="WandB project name")
-    parser.add_argument("--run_name", type=str, default='omega_ea', help="WandB run name")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--use_wandb", action="store_true", help="Enable WandB logging")
-    parser.add_argument("--use_gpu", action="store_true", help="Enable WandB logging")
-    parser.add_argument("--log_freq", type=int, default=10,
-                        help="Frequency of heatmap logging (generations)")
-
-    # GA
-    parser.add_argument("--ngen", type=int, default=50, help="Generations")
-    parser.add_argument("--pop_size", type=int, default=100,
-                        help="Total population size (will be divided across workers)")
-    parser.add_argument("--top_k", type=int, default=10, help="Top islands to visualize")
-
-    # Env
-    parser.add_argument("--dim", type=int, default=5, help="Environment dimension")
-    parser.add_argument("--n_agents", type=int, default=10, help="Agents per env")
-    parser.add_argument("--episode_len", type=int, default=1000, help="Simulation steps")
-    parser.add_argument("--target_speed", type=float, default=0.05, help="Agent speed")
-    parser.add_argument("--costs", nargs=4, type=float, default=[1.0, 0.5, 0.25, 0.1],
-                        help="Costs: [Priv, Belief, Heading, Pos]")
-    parser.add_argument("--dist_noise_scale_priv", type=float, default=2.0, help="Private noise dist scale")
-    parser.add_argument("--dist_noise_scale_soc", type=float, default=2.0, help="Social noise dist scale")
-
-    return parser.parse_args()
-
-def run_experiment():
-    args = parse_args()
-
+@hydra.main(version_base=None, config_path=".", config_name="ea_evaluation")
+def run_experiment(cfg: DictConfig):
     # Global Seeding
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
+    random.seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    torch.manual_seed(cfg.seed)
 
-    device = "cuda" if torch.cuda.is_available() and args.use_gpu else "cpu"
+    device = "cuda" if torch.cuda.is_available() and cfg.use_gpu else "cpu"
+
+    # Define frozen indices here (indices 2 and 3: Heading and Position)
+    frozen_indices = [2, 3]
 
     # Initialize Modules
-    logger = ExperimentLogger(args.use_wandb, args, save_fig_locally=True)
-    evaluator = VmasEvaluator(args, device)
-    ga = GeneticAlgorithm(n_channels=5)
+    evaluator = VmasEvaluator(cfg, device)
+    cfg.n_envs = evaluator.total_pop
+    logger = ExperimentLogger(cfg.use_wandb, cfg, save_fig_locally=True, frozen_indices=frozen_indices)
+    ga = GeneticAlgorithm(n_channels=5, frozen_indices=frozen_indices)
 
     # Calculate total population size
     total_pop_size = evaluator.total_pop
-    if args.use_wandb:
+    if cfg.use_wandb:
         wandb.config.update({"total_pop_size": total_pop_size, "device": device})
 
     # Initialize Population
-    print(f"Creating {total_pop_size} islands with {args.n_agents} agents...")
-    islands = ga.create_population(pop_size=total_pop_size, n_agents=args.n_agents)
+    print(f"Creating {total_pop_size} islands with {cfg.n_agents} agents...")
+    islands = ga.create_population(pop_size=total_pop_size, n_agents=cfg.n_agents)
 
     # --- Evolution Loop ---
     start_time = time.time()
     env = evaluator.init_env(env_transform=GenePersistenceTransform)
-    for gen in range(args.ngen):
+    for gen in range(cfg.ngen):
         gen_step = gen + 1
         gen_start = time.time()
 
@@ -139,15 +130,16 @@ def run_experiment():
         gen_duration = time.time() - gen_start
 
         # 2. Log
-        steps_per_sec = (total_pop_size * args.episode_len) / gen_duration
+        steps_per_sec = (total_pop_size * cfg.max_steps * cfg.n_agents) / gen_duration
         logger.log_metrics_ga(gen_step, fitness_tensor, steps_per_sec, islands)
 
-        if gen % args.log_freq == 0 or gen_step == args.ngen:
+        if gen % cfg.log_freq == 0 or gen_step == cfg.ngen:
             logger.log_heatmap(islands, fitness_tensor, gen_step)
             logger.log_parallel_plot(islands, fitness_tensor, gen_step)
+            logger.log_ternary_density(islands, fitness_tensor, gen_step)
 
         # 3. Evolve
-        if gen_step < args.ngen:
+        if gen_step < cfg.ngen:
             islands = ga.evolve_population(islands, gen)
 
     total_time = time.time() - start_time
