@@ -62,6 +62,7 @@ class Scenario(BaseScenario):
         # target
         self.n_targets = kwargs.pop("n_targets", 1)
         self.target_speed = kwargs.pop("target_speed", 1.0)
+        self.target_persistence =kwargs.pop("target_persistence", 20)
 
         # agents
         self.n_agents = kwargs.pop("n_agents", 5)
@@ -132,7 +133,6 @@ class Scenario(BaseScenario):
                 collide=False,
                 shape=Sphere(radius=self.agent_radius * self.target_qualities[i] * 4),
                 color=Color.GRAY,
-                alpha=0.1,
                 render_action=True,
                 max_speed=self.max_speed * self.target_speed,
                 action_script=self.action_script_creator(),
@@ -140,7 +140,8 @@ class Scenario(BaseScenario):
                 batch_dim=batch_dim,
                 device=device,
                 dynamics=CustomDynamics(),
-                quality=self.target_qualities[i]
+                quality=self.target_qualities[i],
+                persistence=self.target_persistence
             )
             world.add_agent(target)
 
