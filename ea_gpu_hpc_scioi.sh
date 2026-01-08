@@ -33,9 +33,10 @@ python abm/info_channels_ea.py \
     target_speed="$t_speed" \
     x_dim="$dim" \
     y_dim="$dim" \
-    max_steps=5000 \
+    max_steps=1000 \
     n_envs=100 \
     ngen=2000 \
     top_k=10 \
     migration_freq=10 \
-    n_migrants=3
+    n_migrants=3 \
+    cost_priv=0.5
