@@ -35,4 +35,4 @@ python abm/3_channels_abm_exploration.py \
     y_dim="$dim" \
     social_trans_scale="$gamma_belief" \
     belief_selectivity_threshold="$belief_selectivity_array" \
-    process_noise_scale=0.1
+    process_noise_scale=0.05
