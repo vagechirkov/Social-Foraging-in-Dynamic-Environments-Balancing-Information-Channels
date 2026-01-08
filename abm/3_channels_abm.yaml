@@ -14,8 +14,8 @@ n_envs: ???
 x_dim: 5
 y_dim: 5
 n_agents: 10
-n_targets: 1
-targets_quality: "HM"
+n_targets: 3
+targets_quality: "HT"
 max_steps: 100
 target_speed: 0.1
 cost_priv: 0.0
