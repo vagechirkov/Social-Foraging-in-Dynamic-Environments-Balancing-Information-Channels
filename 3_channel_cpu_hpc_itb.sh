@@ -39,7 +39,7 @@ python abm/3_channels_abm_exploration.py \
     y_dim="$dim" \
     social_trans_scale="$gamma_belief" \
     belief_selectivity_threshold="$belief_selectivity_array" \
-    process_noise_scale="$process_noise_scale$" \
+    process_noise_scale="$process_noise_scale" \
     base_noise="$base_noise" \
     dist_noise_scale_priv="$dist_noise_scale_priv" \
     target_persistence="$target_persistence"
