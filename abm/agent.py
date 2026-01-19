@@ -672,25 +672,65 @@ def compute_reward(agent: ForagingAgent, targets):
 
 
 class TargetAgent(Agent):
-    def __init__(self, batch_dim, device, quality=1.0, persistence=20, *args, **kwargs):
+    def __init__(self, batch_dim, device, quality=1.0, persistence=20, target_movement_pattern="crw",
+                 relocation_interval=100, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.quality = torch.ones(batch_dim, device=device) * quality
+        self.target_movement_pattern = target_movement_pattern
+
+        # Correlated Random Walk
         # converted to radians
         self.persistence_sigma = persistence * (torch.pi / 180.0)
-        # Heading alpha for correlated random walk
+        # Heading for correlated random walk
         self.heading = torch.zeros(batch_dim, device=device)
-        self.reset_heading(batch_dim, device)
+        self._reset_heading(batch_dim, device)
 
-    def reset_heading(self, batch_dim, device):
-        # Initialize random heading [0, 2pi]
-        self.heading = torch.rand(batch_dim, device=device) * 2 * torch.pi
+        # Periodically Relocating
+        self.time_since_last_relocation = torch.zeros(batch_dim, device=device)
+        self.relocation_interval = relocation_interval
 
     def update_state_based_on_action(self, t: Agent, world):
+        if self.target_movement_pattern == "crw":
+            self._crw(t, world)
+        elif self.target_movement_pattern == "periodically_relocate":
+            ...
+            self._periodically_relocate(t, world)
+        else:
+            raise ValueError(f"Unknown target movement pattern: {self.target_movement_pattern}")
+
+    def _periodically_relocate(self, t: Agent, world):
+        # t.state.pos
+        t.state.pos = torch.where(
+            t.time_since_last_relocation >= t.relocation_interval,
+            torch.cat(
+                [
+                    torch.empty(
+                        (t.batch_dim, 1),
+                        device=t.device,
+                        dtype=torch.float32,
+                    ).uniform_(-world.x_semidim, world.x_semidim),
+                    torch.empty(
+                        (t.batch_dim, 1),
+                        device=t.device,
+                        dtype=torch.float32,
+                    ).uniform_(-world.y_semidim, world.y_semidim),
+                ],
+                dim=1,
+            ),
+            t.state.pos)
+
+        t.time_since_last_relocation = torch.where(
+            t.time_since_last_relocation >= t.relocation_interval,
+            torch.zeros(t.batch_dim, device=t.device),
+            t.time_since_last_relocation + 1,
+        )
+
+    def _crw(self, t: Agent, world):
         """
-        Correlated Random Walk (CRW)
-        x(t+1) = x(t) + d(t)
-        alpha(t) = alpha(t-1) + N(0, sigma^2)
-        """
+            Correlated Random Walk (CRW)
+            x(t+1) = x(t) + d(t)
+            alpha(t) = alpha(t-1) + N(0, sigma^2)
+            """
         # 1. Update Heading
         self.heading += torch.randn(t.batch_dim, device=t.device) * self.persistence_sigma
 
@@ -706,6 +746,10 @@ class TargetAgent(Agent):
             if torch.any(hit_mask):
                 t.state.vel[hit_mask, dim] *= -1
                 self.heading[hit_mask] = torch.atan2(t.state.vel[hit_mask, Y], t.state.vel[hit_mask, X])
+
+    def _reset_heading(self, batch_dim, device):
+        # Initialize random heading [0, 2pi]
+        self.heading = torch.rand(batch_dim, device=device) * 2 * torch.pi
 
 
 class CustomDynamics(Dynamics):

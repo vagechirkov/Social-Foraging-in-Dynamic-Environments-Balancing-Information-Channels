@@ -46,6 +46,9 @@ class Scenario(BaseScenario):
         self.target_speed = None
         self.targets_quality_type = None
         self.target_qualities = None
+        self.target_persistence = None
+        self.target_movement_pattern = None
+        self.relocation_interval = None
 
     def make_world(self, batch_dim: int, device: torch.device, **kwargs):
         self.is_interactive = kwargs.pop("is_interactive", False)
@@ -62,7 +65,9 @@ class Scenario(BaseScenario):
         # target
         self.n_targets = kwargs.pop("n_targets", 1)
         self.target_speed = kwargs.pop("target_speed", 1.0)
-        self.target_persistence =kwargs.pop("target_persistence", 20)
+        self.target_persistence = kwargs.pop("target_persistence", 20)
+        self.target_movement_pattern = kwargs.pop("target_movement_pattern", "crw")
+        self.relocation_interval = kwargs.pop("relocation_interval", 100)
 
         # agents
         self.n_agents = kwargs.pop("n_agents", 5)
@@ -141,7 +146,9 @@ class Scenario(BaseScenario):
                 device=device,
                 dynamics=CustomDynamics(),
                 quality=self.target_qualities[i],
-                persistence=self.target_persistence
+                persistence=self.target_persistence,
+                target_movement_pattern=self.target_movement_pattern,
+                relocation_interval=self.relocation_interval,
             )
             world.add_agent(target)
 
@@ -271,7 +278,7 @@ class Scenario(BaseScenario):
 
                 # Scale factors: 2 std deviations (approx 95% confidence interval)
                 # make_circle creates radius 1, so we scale by sqrt(eigval)*2
-                std = 2  # 1
+                std = 1  # 1
                 scale_x = torch.sqrt(eigvals[0]) * std
                 scale_y = torch.sqrt(eigvals[1]) * std
 
@@ -301,7 +308,7 @@ class Scenario(BaseScenario):
 if __name__ == "__main__":
     scenario = Scenario()
     control_two_agents = False
-    display_info = True
+    display_info = False
     save_render = True # True
 
     InteractiveEnv(
@@ -312,26 +319,34 @@ if __name__ == "__main__":
             wrapper="gym",
             seed=0,
             wrapper_kwargs={"return_numpy": False},
-            x_dim=5,
-            y_dim=5,
+            x_dim=2,
+            y_dim=2,
             target_speed=0.1,
             n_agents=10,
-            n_targets=3,
-            targets_quality = 'HT',
+            n_targets=1,
+            targets_quality = 'HM',
             is_interactive=True,
-            initialization_box_ratio=0.8,
+            initialization_box_ratio=0.5,
             viewer_zoom=1.05,
             viewer_size = (600, 600),
             visualize_semidims=True,
             min_dist_between_entities=0.1,
             agent_radius=0.01,
             max_speed=0.05,
-            dist_noise_scale_priv=1.0,
-            dist_noise_scale_soc=1.0,
-            social_trans_scale=1.0
+            dist_noise_scale_priv=2.0,
+            dist_noise_scale_soc=0,  # 2.0,
+            social_trans_scale=0.01,  # 1.0,
+            belief_selectivity_threshold=6.0,
+            process_noise_scale=0.05,
+            cost_priv=0,
+            cost_belief=0,
+            base_noise=0.1,
+            target_persistence=1,
+            target_movement_pattern="periodically_relocate",
+            relocation_interval=50
         ),
         control_two_agents=control_two_agents,
         display_info=display_info,
         save_render=save_render,
-        render_name=f"{scenario}_interactive" if isinstance(scenario, str) else "interactive_3",
+        render_name=f"{scenario}_interactive" if isinstance(scenario, str) else "interactive_3_priv_only",
     )
