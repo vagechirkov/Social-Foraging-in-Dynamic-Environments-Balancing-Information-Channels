@@ -725,9 +725,11 @@ class TargetAgent(Agent):
             raise ValueError(f"Unknown target movement pattern: {self.target_movement_pattern}")
 
     def _periodically_relocate(self, t: Agent, world):
+        should_relocate = (t.time_since_last_relocation >= t.relocation_interval).unsqueeze(-1)
+
         # t.state.pos
         t.state.pos = torch.where(
-            t.time_since_last_relocation >= t.relocation_interval,
+            should_relocate,
             torch.cat(
                 [
                     torch.empty(
@@ -743,10 +745,11 @@ class TargetAgent(Agent):
                 ],
                 dim=1,
             ),
-            t.state.pos)
+            t.state.pos
+        )
 
         t.time_since_last_relocation = torch.where(
-            t.time_since_last_relocation >= t.relocation_interval,
+            should_relocate.squeeze(-1),
             torch.zeros(t.batch_dim, device=t.device),
             t.time_since_last_relocation + 1,
         )

@@ -17,7 +17,7 @@ n_agents: 10
 n_targets: 1
 targets_quality: "HM"
 target_persistence: 20
-target_movement_pattern: "periodically_relocate"
+target_movement_pattern: "periodically_relocate"  # crw
 relocation_interval: 100
 max_steps: 100
 target_speed: 0.1
