@@ -337,13 +337,13 @@ if __name__ == "__main__":
             dist_noise_scale_soc=0,  # 2.0,
             social_trans_scale=0.01,  # 1.0,
             belief_selectivity_threshold=0.1,
-            process_noise_scale=0.05,
+            process_noise_scale=0.1,
             cost_priv=0,
             cost_belief=0,
             base_noise=0.1,
             target_persistence=1,
             target_movement_pattern="periodically_relocate",
-            relocation_interval=50
+            relocation_interval=150
         ),
         control_two_agents=control_two_agents,
         display_info=display_info,

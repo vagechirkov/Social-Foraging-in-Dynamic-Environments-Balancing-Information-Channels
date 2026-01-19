@@ -526,4 +526,5 @@ wandb/
 *.png
 uv.lock
 outputs/
+abm/multirun/
 

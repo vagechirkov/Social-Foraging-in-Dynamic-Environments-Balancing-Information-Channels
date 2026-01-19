@@ -26,6 +26,7 @@ base_noise=$8
 dist_noise_scale_priv=$9
 target_persistence=${10}
 process_noise_scale=${11}
+relocation_interval=${12}
 
 python abm/3_channels_abm_exploration.py \
     --m n_agents="$n_agents" \
@@ -42,4 +43,6 @@ python abm/3_channels_abm_exploration.py \
     process_noise_scale="$process_noise_scale" \
     base_noise="$base_noise" \
     dist_noise_scale_priv="$dist_noise_scale_priv" \
-    target_persistence="$target_persistence"
+    target_persistence="$target_persistence" \
+    target_movement_pattern="periodically_relocate" \
+    relocation_interval="$relocation_interval"
