@@ -11,7 +11,7 @@ base_noise_array=(0.1)
 dist_noise_scale_priv_array=(2)  # 2 4 6
 target_persistence_array=(20)
 process_noise_scale_array=(0.1)
-relocation_interval_array=(50 150 250 350 450)
+relocation_interval_array=(750 1250 1750)
 
 for process_noise_scale  in "${process_noise_scale_array[@]}"; do
     for target_persistence in "${target_persistence_array[@]}"; do
