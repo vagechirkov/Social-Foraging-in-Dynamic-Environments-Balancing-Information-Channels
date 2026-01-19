@@ -124,11 +124,12 @@ class AgentObservations:
     """Namespace for stateless observation strategies."""
 
     @staticmethod
-    def private(agent, targets, indices=None):
+    def private(agent, targets, indices=None, conservative_margin_sigma: float = 1.0):
         """
         Implements Private Sensing (Z_priv).
         The agent scans the environment and receives noisy estimates for all resources.
-        Noise scales with distance.
+        Noise is generated via TRUE distance (physics).
+        Certainty (Covariance) is estimated via OBSERVED distance (conservative).
         """
         device = agent.device
 
@@ -149,34 +150,55 @@ class AgentObservations:
             # 1. Calculate Euclidean distance to target d_{ik}
             # agent.state.pos: (batch, 2)
             # t.state.pos: (batch, 2)
-            diff = agent_pos - t_pos
-            dist = torch.norm(diff, dim=1)  # (batch,)
+            # Calculate True Euclidean distance for physical noise generation
+            diff_true = agent_pos - t_pos
+            dist_true = torch.norm(diff_true, dim=1)  # (batch,)
 
             # 2. Determine variances based on distance
             # sigma_priv^2(d_ik); sigma_qual^2(d_ik) - assuming similar scaling for quality
-            sigma_priv = agent.base_noise + agent.dist_noise_scale_priv * dist
-            var_priv = sigma_priv ** 2
+            # Calculate physical noise scale
+            sigma_physics = agent.base_noise + agent.dist_noise_scale_priv * dist_true
 
-            # 3. Create the covariance matrix Sigma_{obs} = sigma^2 * I
+            # 3. Sample target position z_{i,k} ~ N(x_k, Sigma_{true})
+            noise_pos = torch.randn(batch_dim, 2, device=device) * sigma_physics.unsqueeze(1)
+            observed_pos = t_pos + noise_pos
+            target_pos[:, i, :] = observed_pos
+
+            # Calculate distance to the *observed* point (Conservative Estimate)
+            diff_obs = agent_pos - observed_pos
+            diff_obs = torch.norm(diff_obs, dim=1)
+
+            # Calculate estimated variance based on observed distance
+            sigma_at_obs = agent.base_noise + agent.dist_noise_scale_priv * diff_obs
+
+            # Conservative Distance Adjustment
+            # We add 1 standard deviation to the distance. This accounts for the possibility that the target is actually
+            # further away but noise pulled the observation closer.
+            # D_conservative = D_obs + (1 * Sigma_at_obs)
+            dist_conservative = diff_obs + (conservative_margin_sigma * sigma_at_obs)
+
+            # Re-calculate sigma using the inflated distance
+            sigma_conservative = agent.base_noise + agent.dist_noise_scale_priv * dist_conservative
+            var_conservative = sigma_conservative ** 2
+
+            # 4. Create the covariance matrix Sigma_{obs} = sigma^2 * I
             # We construct a diagonal matrix for each batch element
             # Shape: (batch, 2, 2)
             cov_i = torch.zeros(batch_dim, 2, 2, device=device)
-            cov_i[:, 0, 0] = var_priv
-            cov_i[:, 1, 1] = var_priv
+            cov_i[:, 0, 0] = var_conservative
+            cov_i[:, 1, 1] = var_conservative
             target_covariance[:, i, :, :] = cov_i
-
-            # 4. Sample target position z_{i,k} ~ N(x_k, Sigma_{obs})
-            noise_pos = torch.randn(batch_dim, 2, device=device) * sigma_priv.unsqueeze(1)
-            target_pos[:, i, :] = t_pos + noise_pos
 
             # 5. Sample target quality o_{q,k} ~ N(q_k, sigma_qual^2)
             true_quality = getattr(t, 'quality', torch.ones(batch_dim, device=device))
             # Assuming t.quality is (batch_dim,)
             t_qual = true_quality if indices is None else true_quality[indices]
 
-            noise_qual = torch.randn(batch_dim, device=device) * sigma_priv
+            noise_qual = torch.randn(batch_dim, device=device) * sigma_physics
             target_qual[:, i] = t_qual + noise_qual
-            target_qual_var[:, i] = var_priv
+
+            # Report the estimated variance for quality as well
+            target_qual_var[:, i] = var_conservative
 
         return target_pos, target_covariance, target_qual, target_qual_var
 
