@@ -27,9 +27,11 @@ dist_noise_scale_priv=$9
 target_persistence=${10}
 process_noise_scale=${11}
 relocation_interval=${12}
+n_targets=${13}
 
 python abm/3_channels_abm_exploration.py \
     --m n_agents="$n_agents" \
+    n_targets="$n_targets" \
     max_steps=5000 \
     replicates=100 \
     run_name="costs" \

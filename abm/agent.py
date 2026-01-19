@@ -735,8 +735,8 @@ class TargetAgent(Agent):
         self._reset_heading(batch_dim, device)
 
         # Periodically Relocating
-        self.time_since_last_relocation = torch.zeros(batch_dim, device=device)
-        self.relocation_interval = relocation_interval
+        self.relocation_interval = int(relocation_interval)
+        self.time_since_last_relocation = torch.randint(0, relocation_interval, (batch_dim, ), device=device)
 
     def update_state_based_on_action(self, t: Agent, world):
         if self.target_movement_pattern == "crw":
