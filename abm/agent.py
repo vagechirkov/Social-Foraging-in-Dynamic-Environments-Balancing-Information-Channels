@@ -237,29 +237,56 @@ class AgentObservations:
         sigma_trans = agent.base_sigma_trans + agent.dist_noise_scale_soc * d_ij
         var_trans = sigma_trans ** 2 # (batch,)
 
-        # SELECTIVITY TO SOCIAL INFO
-        # A. Calculate Difference Vector (Delta)
-        # shape: (batch, n_targets, 2)
-        delta = agent.belief_target_pos[indices] - neighbor_belief_pos
+        # # SELECTIVITY TO SOCIAL INFO
+        # # A. Calculate Difference Vector (Delta)
+        # # shape: (batch, n_targets, 2)
+        # delta = agent.belief_target_pos[indices] - neighbor_belief_pos
+        #
+        # # B. Invert Neighbor Covariance (Analytical Inverse)
+        # neigh_cov_inv = invert_2x2_matrix(neighbor_belief_cov)
+        #
+        # # C. Mahalanobis Distance: delta^T @ Sigma^-1 @ delta
+        # # (batch, n_targets, 1, 2) @ (batch, n_targets, 2, 2) @ (batch, n_targets, 2, 1)
+        #
+        # # term1 = Sigma^-1 @ delta
+        # term1 = torch.matmul(neigh_cov_inv, delta.unsqueeze(-1))
+        #
+        # # dist_sq = delta^T @ term1
+        # dist_sq = torch.matmul(delta.unsqueeze(-2), term1).squeeze(-1).squeeze(-1)
+        #
+        # # D. The Gate
+        # # If Distance > Threshold, the info is "Surprising/Novel" (Useful).
+        # # If Distance is small, it's either Redundant (we agree) or Useless (neighbor is lost, i.e. low precision).
+        # is_novel = dist_sq > agent.belief_selectivity_threshold
+        #
+        # agent.obs_validity_mask[indices] = is_novel.any(dim=1)
 
-        # B. Invert Neighbor Covariance (Analytical Inverse)
-        neigh_cov_inv = invert_2x2_matrix(neighbor_belief_cov)
+        # SELECTIVITY: RELATIVE CERTAINTY CHECK
+        # A. Retrieve Self Belief Covariance
+        # Shape: (batch, n_targets, 2, 2)
+        self_belief_cov = agent.belief_target_covariance[indices]
 
-        # C. Mahalanobis Distance: delta^T @ Sigma^-1 @ delta
-        # (batch, n_targets, 1, 2) @ (batch, n_targets, 2, 2) @ (batch, n_targets, 2, 1)
+        # B. Calculate Determinants (Generalized Variance)
+        # |Sigma| = ad - bc
+        # This represents the "Area" of uncertainty. Lower is better.
 
-        # term1 = Sigma^-1 @ delta
-        term1 = torch.matmul(neigh_cov_inv, delta.unsqueeze(-1))
+        def get_determinant(cov):
+            return (cov[..., 0, 0] * cov[..., 1, 1]) - (cov[..., 0, 1] * cov[..., 1, 0])
 
-        # dist_sq = delta^T @ term1
-        dist_sq = torch.matmul(delta.unsqueeze(-2), term1).squeeze(-1).squeeze(-1)
+        # Shape: (batch, n_targets)
+        variance_self = get_determinant(self_belief_cov)
+        variance_neighbour = get_determinant(neighbor_belief_cov)
 
-        # D. The Gate
-        # If Distance > Threshold, the info is "Surprising/Novel" (Useful).
-        # If Distance is small, it's either Redundant (we agree) or Useless (neighbor is lost, i.e. low precision).
-        is_novel = dist_sq > agent.belief_selectivity_threshold
+        # C. The Gate (Relative Comparison)
+        # We select if Neighbor Variance is LOWER than Self Variance.
+        # This corresponds to: Own_Certainty < Other_Certainty
+        # Threshold > 1.0: select neighbor less certain than we are
+        # Threshold < 1.0: select neighbor more certain than we are
 
-        agent.obs_validity_mask[indices] = is_novel.any(dim=1)
+        is_more_certain = variance_neighbour < (variance_self * agent.belief_selectivity_threshold)
+
+        # If the neighbor is more certain about ANY target, we accept the packet.
+        agent.obs_validity_mask[indices] = is_more_certain.any(dim=1)
 
         # 4. Construct Observations
 
@@ -693,7 +720,6 @@ class TargetAgent(Agent):
         if self.target_movement_pattern == "crw":
             self._crw(t, world)
         elif self.target_movement_pattern == "periodically_relocate":
-            ...
             self._periodically_relocate(t, world)
         else:
             raise ValueError(f"Unknown target movement pattern: {self.target_movement_pattern}")

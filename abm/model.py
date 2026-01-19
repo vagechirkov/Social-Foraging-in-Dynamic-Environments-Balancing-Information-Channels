@@ -336,7 +336,7 @@ if __name__ == "__main__":
             dist_noise_scale_priv=2.0,
             dist_noise_scale_soc=0,  # 2.0,
             social_trans_scale=0.01,  # 1.0,
-            belief_selectivity_threshold=6.0,
+            belief_selectivity_threshold=0.1,
             process_noise_scale=0.05,
             cost_priv=0,
             cost_belief=0,
