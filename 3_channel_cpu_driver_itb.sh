@@ -60,7 +60,8 @@ for n_targets in "${n_targets_array[@]}"; do
                                   "$n_targets" \
                                   "$process_noise_scale_het_ratio" \
                                   "$process_noise_scale_het_scale"
-
+                            done
+                          done
                         done
                       done
                     done
