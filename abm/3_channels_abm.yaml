@@ -34,6 +34,8 @@ belief_selectivity_threshold: 3.0  # Mahalanobis distance
 # other params
 base_noise: 0.1
 process_noise_scale: 0.02
+process_noise_scale_het_ratio: 0.0
+process_noise_scale_het_scale: 1.0
 momentum: 0.9
 initialization_box_ratio: 0.5
 min_dist_between_entities: 0.001

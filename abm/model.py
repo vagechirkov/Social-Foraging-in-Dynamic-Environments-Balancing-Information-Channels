@@ -36,6 +36,8 @@ class Scenario(BaseScenario):
 
         self.action_size = 1
         self.n_agents = None
+        self.process_noise_scale_het_ratio = None
+        self.process_noise_scale_het_scale = None
         self.min_dist_between_entities = None
         self.min_collision_distance = 0.005
         self.agent_radius = None
@@ -72,6 +74,8 @@ class Scenario(BaseScenario):
         # agents
         self.n_agents = kwargs.pop("n_agents", 5)
         self.max_speed = kwargs.pop("max_speed", 0.05)
+        self.process_noise_scale_het_ratio = kwargs.pop("process_noise_scale_het_ratio", 0.0)
+        self.process_noise_scale_het_scale = kwargs.pop("process_noise_scale_het_scale", 1.0)
 
         agent_kwargs = {
             "base_noise": kwargs.pop("base_noise", 0.1),
@@ -130,6 +134,8 @@ class Scenario(BaseScenario):
                 n_targets=self.n_targets,
                 **agent_kwargs
             )
+            if i < (self.process_noise_scale_het_ratio * self.n_agents):
+                agent.process_noise_scale /= self.process_noise_scale_het_scale
             world.add_agent(agent)
 
         for i in range(self.n_targets):
@@ -199,11 +205,11 @@ class Scenario(BaseScenario):
     def process_action(self, agent: Agent):
         if self.is_interactive:
             probs = torch.zeros(5)
-            probs[0] = 0.9 # Private
-            probs[1] = 0.05 # Belief
+            probs[0] = 0.5 # 0.0 if 'agent_0' in agent.name else 1.0 # Private
+            probs[1] = 0.5 # 1.0 if 'agent_0' in agent.name else 0.0 # Belief
             probs[2] = 0.0 # Heading
             probs[3] = 0.0 # Position
-            probs[4] = 0.05 # None (no update)
+            probs[4] = 0.0 # 9 # None (no update)
             agent.action.u = torch.distributions.Categorical(probs=probs).sample((agent.batch_dim, 1))
 
         if "agent" in agent.name and isinstance(agent, ForagingAgent):
@@ -323,7 +329,7 @@ if __name__ == "__main__":
             y_dim=2,
             target_speed=0.1,
             n_agents=10,
-            n_targets=1,
+            n_targets=3,
             targets_quality = 'HM',
             is_interactive=True,
             initialization_box_ratio=0.5,
@@ -333,17 +339,19 @@ if __name__ == "__main__":
             min_dist_between_entities=0.1,
             agent_radius=0.01,
             max_speed=0.05,
-            dist_noise_scale_priv=2.0,
+            dist_noise_scale_priv=0.5,
             dist_noise_scale_soc=0,  # 2.0,
             social_trans_scale=0.01,  # 1.0,
             belief_selectivity_threshold=0.1,
-            process_noise_scale=0.1,
+            process_noise_scale=0.5,
             cost_priv=0,
             cost_belief=0,
             base_noise=0.1,
             target_persistence=1,
             target_movement_pattern="periodically_relocate",
-            relocation_interval=150
+            relocation_interval=250,
+            process_noise_scale_het_ratio=0.5,
+            process_noise_scale_het_scale=10
         ),
         control_two_agents=control_two_agents,
         display_info=display_info,
