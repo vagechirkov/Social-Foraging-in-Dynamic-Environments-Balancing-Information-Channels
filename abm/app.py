@@ -43,7 +43,7 @@ p_private = st.sidebar.number_input("P(Private)", 0.0, 1.0, 0.25)
 p_consensus = st.sidebar.number_input("P(Consensus)", 0.0, 1.0, 0.25)
 
 st.sidebar.header("Target Behavior")
-target_pattern = st.sidebar.selectbox("Target Movement Pattern", ["crw", "periodically_relocate"], index=1)
+target_pattern = st.sidebar.selectbox("Target Movement Pattern", ["crw", "periodically_relocate", "levy"], index=1)
 if target_pattern == "periodically_relocate":
     relocation_interval = st.sidebar.slider("Relocation Interval", 50, 1000, 250)
     persistence = 1 

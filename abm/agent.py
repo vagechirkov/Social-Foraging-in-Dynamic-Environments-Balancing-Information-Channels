@@ -885,6 +885,9 @@ class TargetAgent(Agent):
             self._crw(t, world)
         elif self.target_movement_pattern == "periodically_relocate":
             self._periodically_relocate(t, world)
+        elif self.target_movement_pattern == "levy":
+            self._crw(t, world)
+            self._periodically_relocate(t, world)
         else:
             raise ValueError(f"Unknown target movement pattern: {self.target_movement_pattern}")
 
@@ -911,6 +914,13 @@ class TargetAgent(Agent):
             ),
             t.state.pos
         )
+
+        # Reset heading if relocating
+        if torch.any(should_relocate):
+            # We convert should_relocate to a mask and update heading where needed
+            relocate_mask = should_relocate.squeeze(-1)
+            new_headings = torch.rand(t.batch_dim, device=t.device) * 2 * torch.pi
+            self.heading = torch.where(relocate_mask, new_headings, self.heading)
 
         t.time_since_last_relocation = torch.where(
             should_relocate.squeeze(-1),

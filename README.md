@@ -27,3 +27,9 @@ sbatch ea_cpu_driver_itb.sh
 ```bash
 bash ea_gpu_driver_scioi.sh 
 ```
+
+## Streamlit Visualization
+To run the interactive visualization:
+```bash
+uv run streamlit run abm/app.py
+```
