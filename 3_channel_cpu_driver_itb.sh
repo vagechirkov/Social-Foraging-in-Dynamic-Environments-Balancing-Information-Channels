@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # Consensus Parameters
-consensus_selectivity_array=(0.1 0.5 1.0 3.0)
-cost_consensus_array=(0.05 0.5)
+consensus_selectivity_array=(1.0 3.0)
 
 # Belief Parameters (Fixed for this batch)
 belief_selectivity_array=(3.0)
@@ -16,21 +15,22 @@ dim_array=(5)                                   # Options: 5 10 15
 n_agent_array=(10)                              # Options: 20 30
 
 # Target
-n_targets_array=(3 1)
-target_speed_array=(0.05)                       # Options: 0.3 0.5
+n_targets_array=(1)
+target_speed_array=(0.5)                        # Options: 0.1 0.3 0.5
 target_persistence_array=(20)
-relocation_interval_array=(500 1000)
+relocation_interval_array=(200)
 
 # Costs
 cost_priv=(0.5)                                 # Options: 0.5 0.1 0.02
 cost_belief=(0.05)                              # Options: 0.01 0.05 0.5 0.1 0.02
+cost_consensus_array=(0.05)
 
 # Noise
 base_noise_array=(0.1)
-dist_noise_scale_priv_array=(0.1 0.5 1.0)   # Options: 0 - inf
-process_noise_scale_array=(0.1 0.5 1.0)
-process_noise_scale_het_ratio_array=(0.5 0.2 0.8)
-process_noise_scale_het_scale_array=(10 100)
+dist_noise_scale_priv_array=(0.1)   # 0.5 1.0
+process_noise_scale_array=(0.05)    # 0.1 0.5 1.0
+process_noise_scale_het_ratio_array=(0)   # 0.5 0.2 0.8
+process_noise_scale_het_scale_array=(10)    # 100
 
 
 # --- Execution Loops ---

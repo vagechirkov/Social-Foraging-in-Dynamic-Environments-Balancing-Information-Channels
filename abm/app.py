@@ -19,7 +19,7 @@ STATE_COLOR_MAP = {
 }
 
 st.set_page_config(page_title="ABM Simulation", layout="wide")
-st.title("Social Foraging ABM - Fast Heatmap")
+# st.title("Social Foraging ABM - Fast Heatmap")
 
 # Lazy Import
 try:
@@ -31,27 +31,32 @@ except ImportError as e:
     st.stop()
 
 # --- Simulation Settings ---
-st.sidebar.header("Simulation Settings")
+# st.sidebar.header("Simulation Settings")
 n_agents = st.sidebar.slider("Number of Agents", 1, 50, 5)
 n_targets = st.sidebar.slider("Number of Targets", 1, 10, 3)
-fps = st.sidebar.slider("FPS Limit", 1, 60, 40)
+fps = st.sidebar.slider("FPS Limit", 1, 260, 100)
 plot_size = st.sidebar.slider("Plot Size", 6, 20, 8)
 
 st.sidebar.header("Movement Distribution")
-p_none = st.sidebar.number_input("P(None)", 0.0, 1.0, 0.5)
-p_private = st.sidebar.number_input("P(Private)", 0.0, 1.0, 0.25)
-p_consensus = st.sidebar.number_input("P(Consensus)", 0.0, 1.0, 0.25)
+p_none = st.sidebar.slider("P(None)", 0.0, 1.0, 0.5)
+p_private = st.sidebar.slider("P(Private)", 0.0, 1.0, 0.25)
+p_belief = st.sidebar.slider("P(Belief)", 0.0, 1.0, 0.25)
+p_consensus = st.sidebar.slider("P(Consensus)", 0.0, 1.0, 0.0)
 
 st.sidebar.header("Target Behavior")
-target_pattern = st.sidebar.selectbox("Target Movement Pattern", ["crw", "periodically_relocate", "levy"], index=1)
+target_pattern = st.sidebar.selectbox("Target Movement Pattern", ["crw", "periodically_relocate", "levy"], index=2)
 if target_pattern == "periodically_relocate":
     relocation_interval = st.sidebar.slider("Relocation Interval", 50, 1000, 250)
     persistence = 1 
     t_speed = 0.1 # Default for relocation
-else:
+elif target_pattern == "crw":
     persistence = st.sidebar.slider("Persistence (Degrees)", 1, 90, 20)
-    t_speed = st.sidebar.slider("Target Speed", 0.01, 1.0, 0.1)
+    t_speed = st.sidebar.slider("Target Speed", 0.01, 1.0, 0.5)
     relocation_interval = 250
+if target_pattern == "levy":
+    relocation_interval = st.sidebar.slider("Relocation Interval", 50, 1000, 250)
+    persistence = st.sidebar.slider("Persistence (Degrees)", 1, 90, 20)
+    t_speed = st.sidebar.slider("Target Speed", 0.01, 1.0, 0.5)
 
 # --- Session State ---
 if 'env' not in st.session_state:
@@ -74,7 +79,8 @@ def reset_simulation():
         'viewer_size': (400, 400),
         'visualize_semidims': True, 
         'min_dist_between_entities': 0.1,
-        'agent_radius': 0.01, 'max_speed': 0.05,
+        'agent_radius': 0.01, 
+        'max_speed': 0.05,
         'dist_noise_scale_priv': 0.1,
         'dist_noise_scale_soc': 0,
         'social_trans_scale': 0.01,
@@ -84,7 +90,7 @@ def reset_simulation():
         'cost_belief': 0.0,
         'base_noise': 0.1,
         'cost_consensus': 0.0,
-        'consensus_selectivity_threshold': 3.0,
+        'consensus_selectivity_threshold': 0.1,
         'target_persistence': persistence, 
         'target_movement_pattern': target_pattern, 
         'relocation_interval': relocation_interval, 
@@ -97,8 +103,9 @@ def reset_simulation():
     st.session_state.step = 0
 
 col1, col2 = st.columns(2)
-if col1.button("Initialize / Reset"): reset_simulation()
+if col2.button("Initialize / Reset"): reset_simulation()
 run_simulation = col2.toggle("Run Simulation", value=False)
+placeholder = col1.empty()
 
 def get_gaussian_density(mean, cov, x_range, y_range, res=50):
     x = np.linspace(x_range[0], x_range[1], res)
@@ -173,24 +180,25 @@ def render_heatmap(env, fig, ax):
     buf.seek(0)
     return Image.open(buf)
 
-placeholder = st.empty()
+
 if st.session_state.env is not None:
     env = st.session_state.env
     fig, ax = plt.subplots(figsize=(plot_size, plot_size))
     
     if run_simulation:
         # Probabilities normalization
-        total_p = p_none + p_private + p_consensus
+        total_p = p_none + p_private + p_belief + p_consensus
         if total_p > 0:
-            p_n, p_p, p_c = p_none/total_p, p_private/total_p, p_consensus/total_p
+            p_n, p_p, p_b, p_c = p_none/total_p, p_private/total_p, p_belief/total_p, p_consensus/total_p
         else:
-            p_n, p_p, p_c = 1.0, 0.0, 0.0
+            p_n, p_p, p_b, p_c = 1.0, 0.0, 0.0, 0.0
 
         while True:
             # Action Mapping
             # 0: Priv, 4: None, 5: Consensus
             probs = torch.zeros(6)
             probs[0] = p_p
+            probs[1] = p_b
             probs[4] = p_n
             probs[5] = p_c
             
