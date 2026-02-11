@@ -14,7 +14,7 @@ from torchrl.envs.transforms import Transform
 
 from abm.model import Scenario
 
-CHANNEL_NAMES = ["Priv", "Belief", "Heading", "Pos", "None"]
+CHANNEL_NAMES = ["Priv", "Belief", "Heading", "Pos", "None", "Consensus"]
 N_CHANNELS = len(CHANNEL_NAMES)
 
 

@@ -23,7 +23,12 @@ def invert_2x2_matrix(matrix: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     det = a * d - b * c
 
     # Safe Inverse of Determinant
-    det_safe = torch.where(torch.abs(det) < eps, torch.sign(det) * eps, det)
+    det_safe = torch.where(torch.abs(det) < eps, eps, det)
+    # If det is negative and small, we might want to preserve sign, but let's be simple for now
+    # or better:
+    # sign = torch.sign(det)
+    # sign = torch.where(sign == 0, 1.0, sign)
+    # det_safe = torch.where(torch.abs(det) < eps, sign * eps, det)
     det_inv = 1.0 / det_safe
 
     # Construct Inverse Matrix
@@ -52,6 +57,7 @@ class ForagingAgent(Agent):
             social_pos_scale: float = 5.0,  # Scaling for Positional Proxy
             social_heading_scale: float = 5.0,  # Scaling for Heading Heuristic
             belief_selectivity_threshold: float = 3.0, # Mahalanobis distance threshold, std squared
+            consensus_selectivity_threshold: float = 3.0,
             # --- Physics ---
             momentum: float = 0.9,  # alpha: Gradient smoothing
             # --- Information usage costs ---
@@ -59,6 +65,7 @@ class ForagingAgent(Agent):
             cost_belief: float = 0.5,
             cost_heading: float = 0.25,
             cost_pos: float = 0.1,
+            cost_consensus: float = 0.5,
             *args,
             **kwargs,
     ):
@@ -78,11 +85,12 @@ class ForagingAgent(Agent):
         self.base_sigma_pos = base_noise * social_pos_scale
         self.base_sigma_heading = base_noise * social_heading_scale
         self.belief_selectivity_threshold = belief_selectivity_threshold
+        self.consensus_selectivity_threshold = consensus_selectivity_threshold
 
-        # 3. Energy Costs Vector [Priv, Belief, Heading, Pos, None]
+        # 3. Energy Costs Vector [Priv, Belief, Heading, Pos, None, Consensus]
         # Used for reward calculation/energy expenditure tracking
         self.channel_costs = torch.tensor(
-            [cost_priv, cost_belief, cost_heading, cost_pos, 0.0],
+            [cost_priv, cost_belief, cost_heading, cost_pos, 0.0, cost_consensus],
             device=device
         )
 
@@ -488,11 +496,143 @@ class AgentObservations:
 
         return target_pos, target_covariance, target_qual, target_qual_var
 
+    @staticmethod
+    def others_consensus(agent, other_agents, other_agent_mask, indices=None):
+        """
+        Aggregates beliefs from all other agents using Kalman Filter consensus.
+        """
+        device = agent.device
+        n_targets = agent.n_targets
+
+        if indices is None:
+            indices = torch.arange(agent.batch_dim, device=device)
+        batch_dim = len(indices)
+
+        # 1. Gather ALL neighbors' data (no selection/masking)
+        # Shape: (batch, n_neighbors, ...)
+        
+        # Stack all neighbors' positions: (batch, n_neighbors, 2)
+        all_neighbors_pos = torch.stack([a.state.pos[indices] for a in other_agents], dim=1)
+
+        # Stack all neighbors' belief means: (batch, n_neighbors, n_targets, 2)
+        all_neighbors_belief_pos = torch.stack([a.belief_target_pos[indices] for a in other_agents], dim=1)
+
+        # Stack all neighbors' belief covs: (batch, n_neighbors, n_targets, 2, 2)
+        all_neighbors_belief_cov = torch.stack([a.belief_target_covariance[indices] for a in other_agents], dim=1)
+
+        # Stack all neighbors' quality estimates: (batch, n_neighbors, n_targets)
+        all_neighbors_belief_qual = torch.stack([a.belief_target_qual[indices] for a in other_agents], dim=1)
+        
+        # Stack all neighbors' quality variances: (batch, n_neighbors, n_targets)
+        all_neighbors_belief_qual_var = torch.stack([a.belief_target_qual_var[indices] for a in other_agents], dim=1)
+
+        # 2. Add Transmission Noise to each neighbor's estimate
+        # Distance d_ij: (batch, n_neighbors)
+        # agent.state.pos[indices]: (batch, 2) -> (batch, 1, 2)
+        diff = agent.state.pos[indices].unsqueeze(1) - all_neighbors_pos
+        d_ij = torch.norm(diff, dim=2)
+
+        # Sigma_trans(d_ij): (batch, n_neighbors)
+        sigma_trans = agent.base_sigma_trans + agent.dist_noise_scale_soc * d_ij
+        var_trans = sigma_trans ** 2
+
+        # Add noise to Pos Covariance
+        # Noise Cov: (batch, n_neighbors, 1, 1, 1) expanded to (..., n_targets, 2, 2)
+        # Construct noise matrix (batch, n_neighbors, 2, 2) with var_trans on diagonal
+        noise_mat = torch.zeros(batch_dim, len(other_agents), 2, 2, device=device)
+        noise_mat[..., 0, 0] = var_trans
+        noise_mat[..., 1, 1] = var_trans
+        
+        # Expand to targets: (batch, n_neighbors, n_targets, 2, 2)
+        noise_mat = noise_mat.unsqueeze(2).expand(-1, -1, n_targets, -1, -1)
+        
+        # Adjusted Covariances
+        all_neighbors_belief_cov = all_neighbors_belief_cov + noise_mat
+        
+        # Add noise to Qual Variance
+        # (batch, n_neighbors, n_targets)
+        all_neighbors_belief_qual_var = all_neighbors_belief_qual_var + var_trans.unsqueeze(2).expand(-1, -1, n_targets)
+
+        # 3. Kalman Fusion (Consensus)
+        
+        # --- Spatial Fusion ---
+        # Covariance Intersection / Federated Kalman Filter
+        # Precision = Sum(Sigma_j^-1)
+        # Mean = Precision^-1 * Sum(Sigma_j^-1 * mu_j)
+        
+        # Invert all covariances: (batch, n_neighbors, n_targets, 2, 2)
+        # Flatten batch and neighbor logic for 2x2 inversion
+        shape_cov = all_neighbors_belief_cov.shape
+        flat_cov = all_neighbors_belief_cov.view(-1, 2, 2)
+        flat_inv = invert_2x2_matrix(flat_cov)
+        all_inv_cov = flat_inv.view(*shape_cov)
+
+        # Sum of Precisions: (batch, n_targets, 2, 2)
+        sum_prec = torch.sum(all_inv_cov, dim=1)
+        
+        # New Covariance (aggregated): (batch, n_targets, 2, 2)
+        agg_cov = invert_2x2_matrix(sum_prec.view(-1, 2, 2)).view(batch_dim, n_targets, 2, 2)
+        
+        # Weighted Means
+        # Sigma_j^-1 * mu_j
+        # (..., 2, 2) @ (..., 2, 1) -> (..., 2, 1)
+        # Broadcast mu to (..., 2, 1)
+        mu_vec = all_neighbors_belief_pos.unsqueeze(-1)
+        weighted_mu = torch.matmul(all_inv_cov, mu_vec)
+        
+        # Sum of weighted means: (batch, n_targets, 2, 1)
+        sum_weighted_mu = torch.sum(weighted_mu, dim=1)
+        
+        # Final Mean: agg_cov @ sum_weighted_mu
+        agg_mu = torch.matmul(agg_cov, sum_weighted_mu).squeeze(-1)
+
+        # --- Quality Fusion ---
+        # Precision scalars = 1/var
+        all_inv_qual_var = 1.0 / all_neighbors_belief_qual_var
+        
+        # Sum of Precisions: (batch, n_targets)
+        sum_qual_prec = torch.sum(all_inv_qual_var, dim=1)
+        
+        # New Variance
+        agg_qual_var = 1.0 / sum_qual_prec
+        
+        # Weighted Means
+        # (1/var) * q
+        weighted_q = all_inv_qual_var * all_neighbors_belief_qual
+        sum_weighted_q = torch.sum(weighted_q, dim=1)
+        
+        # Final Quality: agg_var * sum_weighted_q
+        agg_qual = agg_qual_var * sum_weighted_q
+
+        # 4. Selectivity Gate
+        # Compare Aggregated Uncertainty vs Self Uncertainty
+        
+        self_belief_cov = agent.belief_target_covariance[indices]
+        
+        def get_determinant(cov):
+            return (cov[..., 0, 0] * cov[..., 1, 1]) - (cov[..., 0, 1] * cov[..., 1, 0])
+
+        variance_self = get_determinant(self_belief_cov)
+        variance_agg = get_determinant(agg_cov)
+        
+        # If Aggregated Variance is smaller (better) by a factor, accept.
+        is_more_certain = variance_agg < (variance_self * agent.consensus_selectivity_threshold)
+        
+        agent.obs_validity_mask[indices] = is_more_certain.any(dim=1)
+        
+        # 5. Return
+        # We assume the aggregation *is* the observation (noise is already handled in the input fusion)
+        # But wait, observation model usually implies we observe a value with some noise.
+        # Here we constructed a "virtual" observation from the consensus.
+        # We can pass agg_mu and agg_cov directly as the observed state and covariance.
+        
+        return agg_mu, agg_cov, agg_qual, agg_qual_var
+
 
 def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: List[Agent]):
     """
     Collects observations based on agent.action.u[:, 0].
-    Channels: 0: Priv, 1: Belief, 2: Heading, 3: Pos, 4: None
+    Channels: 0: Priv, 1: Belief, 2: Heading, 3: Pos, 4: None, 5: Consensus
     """
     # reset validity mask
     agent.obs_validity_mask[:] = True
@@ -512,6 +652,8 @@ def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: Li
         2: partial(AgentObservations.others_heading, other_agents=other_agents,
                    other_agent_mask=random_other_agent_ind),
         3: partial(AgentObservations.others_location, other_agents=other_agents,
+                   other_agent_mask=random_other_agent_ind),
+        5: partial(AgentObservations.others_consensus, other_agents=other_agents,
                    other_agent_mask=random_other_agent_ind)
     }
 

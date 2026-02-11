@@ -1,8 +1,15 @@
 #!/bin/bash
 
-# Belief Parameters
-belief_selectivity_array=(0.1 0.5 1.0)
+# Consensus Parameters
+consensus_selectivity_array=(0.1 0.5 1.0 3.0)
+cost_consensus_array=(0.05 0.5)
+
+# Belief Parameters (Fixed for this batch)
+belief_selectivity_array=(3.0)
 gamma_belief_array=(0.01)                       # Options: 0.1 1 10
+
+# Channel Mode
+channel_y_name="Consensus"
 
 # Agent & Environment Dimensions
 dim_array=(5)                                   # Options: 5 10 15
@@ -42,24 +49,31 @@ for n_targets in "${n_targets_array[@]}"; do
                         for rel_int in "${relocation_interval_array[@]}"; do
                           for process_noise_scale_het_ratio in "${process_noise_scale_het_ratio_array[@]}"; do
                             for process_noise_scale_het_scale in "${process_noise_scale_het_scale_array[@]}"; do
+                              for cost_consensus in "${cost_consensus_array[@]}"; do
+                                for consensus_selectivity in "${consensus_selectivity_array[@]}"; do
 
-                              # Submit job with arguments explicitly listed on new lines
-                              sbatch 3_channel_cpu_hpc_itb.sh \
-                                  "$t_speed" \
-                                  "$c_priv" \
-                                  "$c_bel" \
-                                  "$dim" \
-                                  "$n_agents" \
-                                  "$gamma_belief" \
-                                  "$belief_selectivity" \
-                                  "$base_noise" \
-                                  "$dist_noise_scale_priv" \
-                                  "$target_persistence" \
-                                  "$process_noise_scale" \
-                                  "$rel_int" \
-                                  "$n_targets" \
-                                  "$process_noise_scale_het_ratio" \
-                                  "$process_noise_scale_het_scale"
+                                  # Submit job with arguments explicitly listed on new lines
+                                  sbatch 3_channel_cpu_hpc_itb.sh \
+                                      "$t_speed" \
+                                      "$c_priv" \
+                                      "$c_bel" \
+                                      "$dim" \
+                                      "$n_agents" \
+                                      "$gamma_belief" \
+                                      "$belief_selectivity" \
+                                      "$base_noise" \
+                                      "$dist_noise_scale_priv" \
+                                      "$target_persistence" \
+                                      "$process_noise_scale" \
+                                      "$rel_int" \
+                                      "$n_targets" \
+                                      "$process_noise_scale_het_ratio" \
+                                      "$process_noise_scale_het_scale" \
+                                      "$cost_consensus" \
+                                      "$consensus_selectivity" \
+                                      "$channel_y_name"
+                                done
+                              done
                             done
                           done
                         done

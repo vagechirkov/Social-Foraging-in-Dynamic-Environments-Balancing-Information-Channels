@@ -8,10 +8,11 @@ from omegaconf import DictConfig
 
 from utils import VmasEvaluator, GenePersistenceTransform, SimpleAgent, ExperimentLogger
 
-# Indices in CHANNEL_NAMES = ["Priv", "Belief", "Heading", "Pos", "None"]
+# Indices in CHANNEL_NAMES = ["Priv", "Belief", "Heading", "Pos", "None", "Consensus"]
 IDX_PRIV = 0
 IDX_BELIEF = 1
 IDX_NONE = 4
+IDX_CONSENSUS = 5
 
 def generate_simplex_grid(resolution: int):
     """
@@ -29,18 +30,18 @@ def generate_simplex_grid(resolution: int):
                 configs.append((p_priv, p_bel, p_none))
     return configs
 
-def probs_to_logits(p_priv, p_bel, p_none):
+def probs_to_logits(p_priv, p_y, p_none, channel_y_idx=IDX_BELIEF):
     """
     Converts desired probabilities to logits.
     We assign -100 to 0-probability channels (effectively 0 after softmax).
     """
-    logits = [-100.0] * 5
+    logits = [-100.0] * 6 # Updated to 6 channels
 
     def get_logit(p):
         return math.log(p) if p > 1e-6 else -100.0
 
     logits[IDX_PRIV] = get_logit(p_priv)
-    logits[IDX_BELIEF] = get_logit(p_bel)
+    logits[channel_y_idx] = get_logit(p_y)
     logits[IDX_NONE] = get_logit(p_none)
 
     return logits
@@ -54,6 +55,18 @@ def run_exploration(cfg: DictConfig):
     torch.manual_seed(cfg.seed)
 
     device = "cuda" if torch.cuda.is_available() and cfg.use_gpu else "cpu"
+
+    # Determine Channel Y
+    channel_y_name = getattr(cfg, "channel_y_name", "Belief")
+    print(f"Exploration Mode: Priv vs {channel_y_name} vs None")
+
+    if channel_y_name == "Belief":
+        channel_y_idx = IDX_BELIEF
+    elif channel_y_name == "Consensus":
+        channel_y_idx = IDX_CONSENSUS
+    else:
+        raise ValueError(f"Unknown channel_y_name: {channel_y_name}")
+
 
     # 1. Generate Configurations & Calculate Exact Requirements
     print(f"Generating simplex grid with resolution {cfg.resolution}...")
@@ -87,8 +100,8 @@ def run_exploration(cfg: DictConfig):
     all_islands = []
 
     # A. Generate Actual Islands
-    for (p_p, p_b, p_n) in simplex_points:
-        genes = probs_to_logits(p_p, p_b, p_n)
+    for (p_p, p_y, p_n) in simplex_points:
+        genes = probs_to_logits(p_p, p_y, p_n, channel_y_idx)
         for _ in range(cfg.replicates):
             agents = [SimpleAgent(genes) for _ in range(cfg.n_agents)]
             all_islands.append(agents)
@@ -106,7 +119,8 @@ def run_exploration(cfg: DictConfig):
     print(f"Running evaluation with Population Size: {len(all_islands)} (Actual: {num_actual_sims} + Padding: {padding})")
 
     # Initialize Logger
-    logger = ExperimentLogger(cfg.use_wandb, cfg, save_fig_locally=False)
+    save_fig = getattr(cfg, "save_fig", False)
+    logger = ExperimentLogger(cfg.use_wandb, cfg, save_fig_locally=save_fig)
 
     # 4. Evaluate
     print("Starting simulation...")
@@ -134,11 +148,17 @@ def run_exploration(cfg: DictConfig):
         avg_score = np.mean(scores) / max_possible_score
         plot_data.append({
             'priv': config[0],
-            'bel': config[1],
+            'bel': config[1], # 'bel' here is just the label for the second axis, handled by ternary plot which labels it 'Belief' hardcoded in log_ternary_plot?
             'none': config[2],
             'score': avg_score
         })
-
+    
+    # We should update log_ternary_plot to accept dynamic labels if possible, but 
+    # ExperimentLogger._generate_ternary_plot_fig hardcodes labels.
+    # For now, we reuse 'bel' key but it represents channel_y.
+    # The plot labels in utils.py need update if we want correct visualization labels.
+    # But utils.py is shared. We can pass labels to log_ternary_plot.
+    
     logger.log_ternary_plot(plot_data, cfg.resolution)
     logger.finish()
 

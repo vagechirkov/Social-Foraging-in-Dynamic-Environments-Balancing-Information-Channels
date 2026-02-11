@@ -527,4 +527,4 @@ wandb/
 uv.lock
 outputs/
 abm/multirun/
-
+multirun/

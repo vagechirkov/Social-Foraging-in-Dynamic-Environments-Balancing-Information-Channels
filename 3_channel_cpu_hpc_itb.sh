@@ -30,6 +30,9 @@ relocation_interval=${12}
 n_targets=${13}
 process_noise_scale_het_ratio=${14}
 process_noise_scale_het_scale=${15}
+cost_consensus=${16}
+consensus_selectivity_threshold=${17}
+channel_y_name=${18}
 
 python abm/3_channels_abm_exploration.py \
     --m n_agents="$n_agents" \
@@ -51,4 +54,7 @@ python abm/3_channels_abm_exploration.py \
     target_movement_pattern="periodically_relocate" \
     relocation_interval="$relocation_interval" \
     process_noise_scale_het_ratio="$process_noise_scale_het_ratio" \
-    process_noise_scale_het_scale="$process_noise_scale_het_scale"
+    process_noise_scale_het_scale="$process_noise_scale_het_scale" \
+    cost_consensus="$cost_consensus" \
+    consensus_selectivity_threshold="$consensus_selectivity_threshold" \
+    channel_y_name="$channel_y_name"

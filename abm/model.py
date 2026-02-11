@@ -22,6 +22,7 @@ STATE_COLOR_MAP = {
     2: (0.33725490196078434, 0.7058823529411765, 0.9137254901960784),  # social #56B4E9
     3: (0.33725490196078434, 0.7058823529411765, 0.9137254901960784),  # social #56B4E9
     4: (0.9019607843137255, 0.6235294117647059, 0),  # none #E69F00
+    5: (0.33725490196078434, 0.7058823529411765, 0.9137254901960784),  # social #56B4E9
 }
 
 
@@ -92,7 +93,9 @@ class Scenario(BaseScenario):
             "cost_priv": kwargs.pop("cost_priv", 1.0),
             "cost_belief": kwargs.pop("cost_belief", 0.5),
             "cost_heading": kwargs.pop("cost_heading", 0.25),
-            "cost_pos": kwargs.pop("cost_pos", 0.1)
+            "cost_pos": kwargs.pop("cost_pos", 0.1),
+            "cost_consensus": kwargs.pop("cost_consensus", 0.5),
+            "consensus_selectivity_threshold": kwargs.pop("consensus_selectivity_threshold", 3.0)
         }
 
         self.targets_quality_type = kwargs.pop("targets_quality", "HM")
@@ -204,12 +207,13 @@ class Scenario(BaseScenario):
 
     def process_action(self, agent: Agent):
         if self.is_interactive:
-            probs = torch.zeros(5)
+            probs = torch.zeros(6)
             probs[0] = 0.5 # 0.0 if 'agent_0' in agent.name else 1.0 # Private
             probs[1] = 0.5 # 1.0 if 'agent_0' in agent.name else 0.0 # Belief
             probs[2] = 0.0 # Heading
             probs[3] = 0.0 # Position
             probs[4] = 0.0 # 9 # None (no update)
+            probs[5] = 0.0 # Consensus
             agent.action.u = torch.distributions.Categorical(probs=probs).sample((agent.batch_dim, 1))
 
         if "agent" in agent.name and isinstance(agent, ForagingAgent):
