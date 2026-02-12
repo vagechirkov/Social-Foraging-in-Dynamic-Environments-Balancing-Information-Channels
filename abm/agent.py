@@ -52,13 +52,14 @@ class ForagingAgent(Agent):
             dist_noise_scale_priv: float = 2.0,  # beta_priv: Private signal attenuation
             dist_noise_scale_soc: float = 2.0,  # beta_soc: Social signal attenuation
             process_noise_scale: float = 0.02,  # sigma_proc: Prediction uncertainty
+            bias_magnitude: float = 0.5,
             # --- Social Channel Multipliers (Relative to sigma_0) ---
             social_trans_scale: float = 1.0,  # Scaling for Belief Transfer
             social_pos_scale: float = 5.0,  # Scaling for Positional Proxy
             social_heading_scale: float = 5.0,  # Scaling for Heading Heuristic
             belief_selectivity_threshold: float = 3.0, # Mahalanobis distance threshold, std squared
-            consensus_selectivity_threshold: float = 3.0,
-            social_info_aggregation: str = "oracle",  # "average" or "most_useful"
+            consensus_selectivity_threshold: float = 100.0,
+            social_info_aggregation: str = "average",  # "average" or "most_useful"
             # --- Physics ---
             momentum: float = 0.9,  # alpha: Gradient smoothing
             # --- Information usage costs ---
@@ -95,6 +96,15 @@ class ForagingAgent(Agent):
             [cost_priv, cost_belief, cost_heading, cost_pos, 0.0, cost_consensus],
             device=device
         )
+        # SENSOR BIAS: A random vector that this specific agent 
+        # ALWAYS adds to its observation.
+        # e.g. This agent always sees targets 0.5 units to the "North-East" of where they actually are.
+        random_angle = torch.rand(batch_dim, device=device) * 2 * torch.pi
+        
+        self.sensor_bias = torch.stack([
+            torch.cos(random_angle), 
+            torch.sin(random_angle)
+        ], dim=1) * bias_magnitude # Shape: (batch, 2)
 
         # Reward tracking
         self.target_distance_reward = torch.zeros(batch_dim, device=device)  # only distance
@@ -171,7 +181,11 @@ class AgentObservations:
 
             # 3. Sample target position z_{i,k} ~ N(x_k, Sigma_{true})
             noise_pos = torch.randn(batch_dim, 2, device=device) * sigma_physics.unsqueeze(1)
-            observed_pos = t_pos + noise_pos
+            # OBSERVED = TRUE + NOISE + BIAS
+            # The Kalman Filter can filter out 'noise_pos' over time.
+            # It CANNOT filter out 'self.sensor_bias' because it is constant.
+            observed_pos = t_pos + noise_pos + agent.sensor_bias[indices]
+
             target_pos[:, i, :] = observed_pos
 
             # Calculate distance to the *observed* point (Conservative Estimate)

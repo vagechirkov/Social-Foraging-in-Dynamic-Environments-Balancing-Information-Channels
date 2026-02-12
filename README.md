@@ -22,6 +22,10 @@ See more info [here](https://docs.astral.sh/uv/) and [here](https://docs.astral.
 sbatch ea_cpu_driver_itb.sh
 ```
 
+## Run 3 channels parameter sweep
+```bash
+sbatch 3_channel_cpu_driver_itb.sh
+```
 
 ## RUN EA on GPU cluster
 ```bash

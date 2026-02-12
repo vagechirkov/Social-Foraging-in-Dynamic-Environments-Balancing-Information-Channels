@@ -3,7 +3,7 @@
 #SBATCH --job-name=3-channel-exploration            # Job name
 #SBATCH --output=job_%j.log                         # Output log file (%j will be replaced with job ID)
 #SBATCH --error=job_%j.log                          # Error log file
-#SBATCH --partition=oneday                          # Partition to submit to
+#SBATCH --partition=short                          # Partition to submit to
 #SBATCH --nodes=1                                   # Ensure it runs on one node
 #SBATCH --ntasks=1                                  # Run a single task
 #SBATCH --cpus-per-task=64                          # Request 64 CPUs
@@ -33,6 +33,7 @@ process_noise_scale_het_scale=${15}
 cost_consensus=${16}
 consensus_selectivity_threshold=${17}
 channel_y_name=${18}
+bias_magnitude=${19}
 
 python abm/3_channels_abm_exploration.py \
     --m n_agents="$n_agents" \
@@ -57,4 +58,5 @@ python abm/3_channels_abm_exploration.py \
     process_noise_scale_het_scale="$process_noise_scale_het_scale" \
     cost_consensus="$cost_consensus" \
     consensus_selectivity_threshold="$consensus_selectivity_threshold" \
-    channel_y_name="$channel_y_name"
+    channel_y_name="$channel_y_name" \
+    bias_magnitude="$bias_magnitude"

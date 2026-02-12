@@ -77,6 +77,7 @@ class Scenario(BaseScenario):
         self.max_speed = kwargs.pop("max_speed", 0.05)
         self.process_noise_scale_het_ratio = kwargs.pop("process_noise_scale_het_ratio", 0.0)
         self.process_noise_scale_het_scale = kwargs.pop("process_noise_scale_het_scale", 1.0)
+        self.bias_magnitude = kwargs.pop("bias_magnitude", 0.5)
 
         agent_kwargs = {
             "base_noise": kwargs.pop("base_noise", 0.1),
@@ -135,6 +136,7 @@ class Scenario(BaseScenario):
                 u_range=5,
                 batch_dim=batch_dim,
                 n_targets=self.n_targets,
+                bias_magnitude=self.bias_magnitude,
                 **agent_kwargs
             )
             if i < (self.process_noise_scale_het_ratio * self.n_agents):

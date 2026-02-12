@@ -144,8 +144,8 @@ def run_exploration(cfg: DictConfig):
     # Calculate average fitness for each unique config
     plot_data = []
     midpoint = None
-    target_p_priv = 0.1
-    target_p_none = 0.9
+    target_p_priv = 0.33
+    target_p_none = 0.33
     
     best_dist = float('inf')
     chosen_config = None
