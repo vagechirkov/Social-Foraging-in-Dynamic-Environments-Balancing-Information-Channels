@@ -58,6 +58,7 @@ class ForagingAgent(Agent):
             social_heading_scale: float = 5.0,  # Scaling for Heading Heuristic
             belief_selectivity_threshold: float = 3.0, # Mahalanobis distance threshold, std squared
             consensus_selectivity_threshold: float = 3.0,
+            social_info_aggregation: str = "oracle",  # "average" or "most_useful"
             # --- Physics ---
             momentum: float = 0.9,  # alpha: Gradient smoothing
             # --- Information usage costs ---
@@ -86,6 +87,7 @@ class ForagingAgent(Agent):
         self.base_sigma_heading = base_noise * social_heading_scale
         self.belief_selectivity_threshold = belief_selectivity_threshold
         self.consensus_selectivity_threshold = consensus_selectivity_threshold
+        self.social_info_aggregation = social_info_aggregation
 
         # 3. Energy Costs Vector [Priv, Belief, Heading, Pos, None, Consensus]
         # Used for reward calculation/energy expenditure tracking
@@ -497,10 +499,14 @@ class AgentObservations:
         return target_pos, target_covariance, target_qual, target_qual_var
 
     @staticmethod
-    def others_consensus(agent, other_agents, other_agent_mask, indices=None):
+    def others_consensus(agent, other_agents, other_agent_mask, targets=None, indices=None, aggregation_method="average"):
         """
-        Aggregates beliefs from all other agents using Kalman Filter consensus.
+        Aggregates beliefs from all other agents using Kalman Filter consensus, selecting the most useful neighbor,
+        or using an "oracle" that picks the neighbor closest to the true targets.
         """
+        def get_determinant(cov):
+            return (cov[..., 0, 0] * cov[..., 1, 1]) - (cov[..., 0, 1] * cov[..., 1, 0])
+
         device = agent.device
         n_targets = agent.n_targets
 
@@ -553,64 +559,155 @@ class AgentObservations:
         # (batch, n_neighbors, n_targets)
         all_neighbors_belief_qual_var = all_neighbors_belief_qual_var + var_trans.unsqueeze(2).expand(-1, -1, n_targets)
 
-        # 3. Kalman Fusion (Consensus)
-        
-        # --- Spatial Fusion ---
-        # Covariance Intersection / Federated Kalman Filter
-        # Precision = Sum(Sigma_j^-1)
-        # Mean = Precision^-1 * Sum(Sigma_j^-1 * mu_j)
-        
-        # Invert all covariances: (batch, n_neighbors, n_targets, 2, 2)
-        # Flatten batch and neighbor logic for 2x2 inversion
-        shape_cov = all_neighbors_belief_cov.shape
-        flat_cov = all_neighbors_belief_cov.view(-1, 2, 2)
-        flat_inv = invert_2x2_matrix(flat_cov)
-        all_inv_cov = flat_inv.view(*shape_cov)
+        if aggregation_method == "average":
+            # 3. Kalman Fusion (Consensus)
+            
+            # --- Spatial Fusion ---
+            # Covariance Intersection / Federated Kalman Filter
+            # Precision = Sum(Sigma_j^-1)
+            # Mean = Precision^-1 * Sum(Sigma_j^-1 * mu_j)
+            
+            # Invert all covariances: (batch, n_neighbors, n_targets, 2, 2)
+            # Flatten batch and neighbor logic for 2x2 inversion
+            shape_cov = all_neighbors_belief_cov.shape
+            flat_cov = all_neighbors_belief_cov.view(-1, 2, 2)
+            flat_inv = invert_2x2_matrix(flat_cov)
+            all_inv_cov = flat_inv.view(*shape_cov)
 
-        # Sum of Precisions: (batch, n_targets, 2, 2)
-        sum_prec = torch.sum(all_inv_cov, dim=1)
-        
-        # New Covariance (aggregated): (batch, n_targets, 2, 2)
-        agg_cov = invert_2x2_matrix(sum_prec.view(-1, 2, 2)).view(batch_dim, n_targets, 2, 2)
-        
-        # Weighted Means
-        # Sigma_j^-1 * mu_j
-        # (..., 2, 2) @ (..., 2, 1) -> (..., 2, 1)
-        # Broadcast mu to (..., 2, 1)
-        mu_vec = all_neighbors_belief_pos.unsqueeze(-1)
-        weighted_mu = torch.matmul(all_inv_cov, mu_vec)
-        
-        # Sum of weighted means: (batch, n_targets, 2, 1)
-        sum_weighted_mu = torch.sum(weighted_mu, dim=1)
-        
-        # Final Mean: agg_cov @ sum_weighted_mu
-        agg_mu = torch.matmul(agg_cov, sum_weighted_mu).squeeze(-1)
+            # Sum of Precisions: (batch, n_targets, 2, 2)
+            sum_prec = torch.sum(all_inv_cov, dim=1)
+            
+            # New Covariance (aggregated): (batch, n_targets, 2, 2)
+            agg_cov = invert_2x2_matrix(sum_prec.view(-1, 2, 2)).view(batch_dim, n_targets, 2, 2)
+            
+            # Weighted Means
+            # Sigma_j^-1 * mu_j
+            # (..., 2, 2) @ (..., 2, 1) -> (..., 2, 1)
+            # Broadcast mu to (..., 2, 1)
+            mu_vec = all_neighbors_belief_pos.unsqueeze(-1)
+            weighted_mu = torch.matmul(all_inv_cov, mu_vec)
+            
+            # Sum of weighted means: (batch, n_targets, 2, 1)
+            sum_weighted_mu = torch.sum(weighted_mu, dim=1)
+            
+            # Final Mean: agg_cov @ sum_weighted_mu
+            agg_mu = torch.matmul(agg_cov, sum_weighted_mu).squeeze(-1)
 
-        # --- Quality Fusion ---
-        # Precision scalars = 1/var
-        all_inv_qual_var = 1.0 / all_neighbors_belief_qual_var
-        
-        # Sum of Precisions: (batch, n_targets)
-        sum_qual_prec = torch.sum(all_inv_qual_var, dim=1)
-        
-        # New Variance
-        agg_qual_var = 1.0 / sum_qual_prec
-        
-        # Weighted Means
-        # (1/var) * q
-        weighted_q = all_inv_qual_var * all_neighbors_belief_qual
-        sum_weighted_q = torch.sum(weighted_q, dim=1)
-        
-        # Final Quality: agg_var * sum_weighted_q
-        agg_qual = agg_qual_var * sum_weighted_q
+            # --- Quality Fusion ---
+            # Precision scalars = 1/var
+            all_inv_qual_var = 1.0 / all_neighbors_belief_qual_var
+            
+            # Sum of Precisions: (batch, n_targets)
+            sum_qual_prec = torch.sum(all_inv_qual_var, dim=1)
+            
+            # New Variance
+            agg_qual_var = 1.0 / sum_qual_prec
+            
+            # Weighted Means
+            # (1/var) * q
+            weighted_q = all_inv_qual_var * all_neighbors_belief_qual
+            sum_weighted_q = torch.sum(weighted_q, dim=1)
+            
+            # Final Quality: agg_var * sum_weighted_q
+            agg_qual = agg_qual_var * sum_weighted_q
+        elif aggregation_method == "most_useful":
+            # 3. Select the "Most Useful" neighbor based on Confidence and Novelty
+            
+            # A. Confidence (Certainty): 1 / Determinant
+            # Determinants for all neighbors and targets: (batch, n_neighbors, n_targets)
+            all_dets = get_determinant(all_neighbors_belief_cov)
+            # Confidence is inverse of determinant: (batch, n_neighbors, n_targets)
+            # Use small epsilon to avoid division by zero
+            confidence = 1.0 / torch.clamp(all_dets, min=1e-8)
+            
+            # B. Novelty (Surprise): Mahalanobis Distance
+            # Distance between agent's current belief and neighbors' beliefs
+            # agent.belief_target_pos[indices]: (batch, n_targets, 2)
+            # all_neighbors_belief_pos: (batch, n_neighbors, n_targets, 2)
+            
+            # Expand agent belief for broadcasting: (batch, 1, n_targets, 2)
+            self_mu = agent.belief_target_pos[indices].unsqueeze(1)
+            delta = all_neighbors_belief_pos - self_mu # (batch, n_neighbors, n_targets, 2)
+            
+            # Use agent's current covariance for normalization
+            # agent.belief_target_covariance[indices]: (batch, n_targets, 2, 2) -> (batch, 1, n_targets, 2, 2)
+            self_cov = agent.belief_target_covariance[indices].unsqueeze(1)
+            self_cov_inv = invert_2x2_matrix(self_cov)
+            
+            # Novelty Score (Mahalanobis distance squared): delta^T @ Sigma_self^-1 @ delta
+            # (batch, n_neighbors, n_targets, 1, 2) @ (batch, 1, n_targets, 2, 2) @ (batch, n_neighbors, n_targets, 2, 1)
+            term1 = torch.matmul(self_cov_inv, delta.unsqueeze(-1)) # (batch, n_neighbors, n_targets, 2, 1)
+            novelty = torch.matmul(delta.unsqueeze(-2), term1).squeeze(-1).squeeze(-1) # (batch, n_neighbors, n_targets)
+            
+            # C. Usefulness Score = Novelty * Confidence
+            score = novelty * confidence # (batch, n_neighbors, n_targets)
+            
+            # Average score across targets for each neighbor: (batch, n_neighbors)
+            avg_score = torch.mean(score, dim=2)
+            
+            # Find the best neighbor (maximum score)
+            # best_neighbor_idx: (batch,)
+            best_neighbor_idx = torch.argmax(avg_score, dim=1)
+            
+            # Gather the best neighbor's belief
+            # Expand index for gather
+            # mu: (batch, n_neighbors, n_targets, 2) -> (batch, 1, n_targets, 2)
+            idx_mu = best_neighbor_idx.view(batch_dim, 1, 1, 1).expand(-1, 1, n_targets, 2)
+            agg_mu = torch.gather(all_neighbors_belief_pos, 1, idx_mu).squeeze(1)
+            
+            # cov: (batch, n_neighbors, n_targets, 2, 2) -> (batch, 1, n_targets, 2, 2)
+            idx_cov = best_neighbor_idx.view(batch_dim, 1, 1, 1, 1).expand(-1, 1, n_targets, 2, 2)
+            agg_cov = torch.gather(all_neighbors_belief_cov, 1, idx_cov).squeeze(1)
+            
+            # qual: (batch, n_neighbors, n_targets) -> (batch, 1, n_targets)
+            idx_qual = best_neighbor_idx.view(batch_dim, 1, 1).expand(-1, 1, n_targets)
+            agg_qual = torch.gather(all_neighbors_belief_qual, 1, idx_qual).squeeze(1)
+            
+            # qual_var: (batch, n_neighbors, n_targets) -> (batch, 1, n_targets)
+            idx_qual_var = best_neighbor_idx.view(batch_dim, 1, 1).expand(-1, 1, n_targets)
+            agg_qual_var = torch.gather(all_neighbors_belief_qual_var, 1, idx_qual_var).squeeze(1)
+
+        elif aggregation_method == "oracle":
+            # 3. Oracle: Select neighbor closest to the TRUE targets
+            
+            if targets is None:
+                raise ValueError("Oracle aggregation requires ground truth targets.")
+                
+            # Stack true target positions: (batch, n_targets, 2)
+            # We must use the same indices for targets
+            true_target_pos = torch.stack([t.state.pos[indices] for t in targets], dim=1)
+            
+            # Distance between neighbors' beliefs and true targets
+            # (batch, n_neighbors, n_targets, 2) - (batch, 1, n_targets, 2)
+            diff_oracle = all_neighbors_belief_pos - true_target_pos.unsqueeze(1)
+            dist_sq_oracle = torch.sum(diff_oracle**2, dim=-1) # (batch, n_neighbors, n_targets)
+            
+            # Average distance error across targets for each neighbor: (batch, n_neighbors)
+            avg_err_oracle = torch.mean(dist_sq_oracle, dim=2)
+            
+            # Best neighbor is the one with MINIMUM average error
+            best_neighbor_idx = torch.argmin(avg_err_oracle, dim=1)
+            
+            # Gather the best neighbor's belief
+            idx_mu = best_neighbor_idx.view(batch_dim, 1, 1, 1).expand(-1, 1, n_targets, 2)
+            agg_mu = torch.gather(all_neighbors_belief_pos, 1, idx_mu).squeeze(1)
+            
+            idx_cov = best_neighbor_idx.view(batch_dim, 1, 1, 1, 1).expand(-1, 1, n_targets, 2, 2)
+            agg_cov = torch.gather(all_neighbors_belief_cov, 1, idx_cov).squeeze(1)
+            
+            idx_qual = best_neighbor_idx.view(batch_dim, 1, 1).expand(-1, 1, n_targets)
+            agg_qual = torch.gather(all_neighbors_belief_qual, 1, idx_qual).squeeze(1)
+            
+            idx_qual_var = best_neighbor_idx.view(batch_dim, 1, 1).expand(-1, 1, n_targets)
+            agg_qual_var = torch.gather(all_neighbors_belief_qual_var, 1, idx_qual_var).squeeze(1)
+
+        else:
+            raise ValueError(f"Unknown aggregation method: {aggregation_method}")
 
         # 4. Selectivity Gate
         # Compare Aggregated Uncertainty vs Self Uncertainty
         
         self_belief_cov = agent.belief_target_covariance[indices]
-        
-        def get_determinant(cov):
-            return (cov[..., 0, 0] * cov[..., 1, 1]) - (cov[..., 0, 1] * cov[..., 1, 0])
 
         variance_self = get_determinant(self_belief_cov)
         variance_agg = get_determinant(agg_cov)
@@ -619,12 +716,6 @@ class AgentObservations:
         is_more_certain = variance_agg < (variance_self * agent.consensus_selectivity_threshold)
         
         agent.obs_validity_mask[indices] = is_more_certain.any(dim=1)
-        
-        # 5. Return
-        # We assume the aggregation *is* the observation (noise is already handled in the input fusion)
-        # But wait, observation model usually implies we observe a value with some noise.
-        # Here we constructed a "virtual" observation from the consensus.
-        # We can pass agg_mu and agg_cov directly as the observed state and covariance.
         
         return agg_mu, agg_cov, agg_qual, agg_qual_var
 
@@ -654,7 +745,9 @@ def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: Li
         3: partial(AgentObservations.others_location, other_agents=other_agents,
                    other_agent_mask=random_other_agent_ind),
         5: partial(AgentObservations.others_consensus, other_agents=other_agents,
-                   other_agent_mask=random_other_agent_ind)
+                   other_agent_mask=random_other_agent_ind,
+                   targets=targets,
+                   aggregation_method=agent.social_info_aggregation)
     }
 
     for ch_idx, obs_func in channel_observation_functions.items():

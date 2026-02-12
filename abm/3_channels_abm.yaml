@@ -6,7 +6,7 @@ use_wandb: true
 use_gpu: false
 
 # exploration settings
-resolution: 20
+resolution: 10
 replicates: 10
 n_envs: ???
 channel_y_name: "Belief"

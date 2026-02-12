@@ -326,12 +326,12 @@ class ExperimentLogger:
             plt.savefig(f"parallel_plot_{gen:04d}.png", dpi=150, bbox_inches='tight')
         plt.close(fig)
 
-    def log_ternary_plot(self, plot_data: List[Dict[str, float]], resolution: int):
+    def log_ternary_plot(self, plot_data: List[Dict[str, float]], resolution: int, midpoint: Optional[float] = None):
         """
         Generates and logs a ternary plot (Private vs Belief vs None).
         Expected plot_data structure: [{'priv': 0.1, 'bel': 0.8, 'none': 0.1, 'score': 10.5}, ...]
         """
-        fig = self._generate_ternary_plot_fig(plot_data, resolution)
+        fig = self._generate_ternary_plot_fig(plot_data, resolution, midpoint)
 
         if self.use_wandb:
             wandb.log({"ternary_landscape": wandb.Image(fig)})
@@ -521,11 +521,12 @@ class ExperimentLogger:
         plt.tight_layout()
         return fig
 
-    def _generate_ternary_plot_fig(self, data: List[Dict[str, float]], resolution: int):
+    def _generate_ternary_plot_fig(self, data: List[Dict[str, float]], resolution: int, midpoint: Optional[float] = None):
         """
         Internal method to generate the matplotlib figure for the ternary plot using mpltern.
         """
         import mpltern
+        from matplotlib.colors import TwoSlopeNorm
         # Extract components
         priv = [item['priv'] for item in data]
         bel = [item['bel'] for item in data]
@@ -544,7 +545,14 @@ class ExperimentLogger:
 
         # tricontourf(t, l, r, values)
         #  shading='gouraud', rasterized=True
-        cs = ax.tripcolor(bel, priv, none, scores, vmin=0, vmax=1, cmap="viridis", shading='flat')
+        
+        cmap = "RdBu_r" if midpoint is not None else "viridis"
+        norm = TwoSlopeNorm(vmin=0, vcenter=midpoint, vmax=1) if midpoint is not None else None
+        
+        if norm is not None:
+            cs = ax.tripcolor(bel, priv, none, scores, cmap=cmap, norm=norm, shading='flat')
+        else:
+            cs = ax.tripcolor(bel, priv, none, scores, vmin=0, vmax=1, cmap=cmap, shading='flat')
         # ax.grid(alpha=0.2)
         ax.grid(axis='t', color='w')
         ax.grid(axis='l', color='w', linestyle='--')

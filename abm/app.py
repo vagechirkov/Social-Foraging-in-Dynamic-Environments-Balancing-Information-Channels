@@ -2,11 +2,15 @@ import streamlit as st
 import numpy as np
 import time
 import os
+import sys
 import torch
 import io
 import matplotlib.pyplot as plt
 from PIL import Image
 from tensordict import TensorDict
+
+# Add the project root to sys.path to allow importing the 'abm' package
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Color map for agents based on state
 STATE_COLOR_MAP = {

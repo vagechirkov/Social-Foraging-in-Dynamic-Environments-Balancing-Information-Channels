@@ -143,23 +143,39 @@ def run_exploration(cfg: DictConfig):
 
     # Calculate average fitness for each unique config
     plot_data = []
+    midpoint = None
+    target_p_priv = 0.1
+    target_p_none = 0.9
+    
+    best_dist = float('inf')
+    chosen_config = None
+
     max_possible_score = cfg.max_steps * 1.75 if cfg.targets_quality == "HT" else cfg.max_steps
     for config, scores in results_map.items():
         avg_score = np.mean(scores) / max_possible_score
+        p_p, p_y, p_n = config
+        
         plot_data.append({
-            'priv': config[0],
-            'bel': config[1], # 'bel' here is just the label for the second axis, handled by ternary plot which labels it 'Belief' hardcoded in log_ternary_plot?
-            'none': config[2],
+            'priv': p_p,
+            'bel': p_y, # Represents channel_y
+            'none': p_n,
             'score': avg_score
         })
+
+        # Find closest point to target (priv=0.1, none=0.9, belief=0.0)
+        dist = math.sqrt((p_p - target_p_priv)**2 + (p_n - target_p_none)**2)
+        if dist < best_dist:
+            best_dist = dist
+            midpoint = avg_score
+            chosen_config = config
     
-    # We should update log_ternary_plot to accept dynamic labels if possible, but 
-    # ExperimentLogger._generate_ternary_plot_fig hardcodes labels.
-    # For now, we reuse 'bel' key but it represents channel_y.
-    # The plot labels in utils.py need update if we want correct visualization labels.
-    # But utils.py is shared. We can pass labels to log_ternary_plot.
+    if chosen_config:
+        print(f"Midpoint target: priv={target_p_priv}, none={target_p_none}")
+        print(f"Closest point found: priv={chosen_config[0]:.4f}, bel={chosen_config[1]:.4f}, none={chosen_config[2]:.4f} "
+              f"(dist={best_dist:.4f})")
+        print(f"Using midpoint value {midpoint:.4f} for colormap normalization.")
     
-    logger.log_ternary_plot(plot_data, cfg.resolution)
+    logger.log_ternary_plot(plot_data, cfg.resolution, midpoint=midpoint)
     logger.finish()
 
 if __name__ == "__main__":

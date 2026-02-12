@@ -28,8 +28,15 @@ sbatch ea_cpu_driver_itb.sh
 bash ea_gpu_driver_scioi.sh 
 ```
 
+## Testing
+To run all tests:
+```bash
+uv run pytest
+```
+
 ## Streamlit Visualization
 To run the interactive visualization:
 ```bash
+PYTHONPATH=.
 uv run streamlit run abm/app.py
 ```
