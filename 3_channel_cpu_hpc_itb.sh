@@ -52,7 +52,7 @@ python abm/3_channels_abm_exploration.py \
     base_noise="$base_noise" \
     dist_noise_scale_priv="$dist_noise_scale_priv" \
     target_persistence="$target_persistence" \
-    target_movement_pattern="levy" \
+    target_movement_pattern="crw" \
     relocation_interval="$relocation_interval" \
     process_noise_scale_het_ratio="$process_noise_scale_het_ratio" \
     process_noise_scale_het_scale="$process_noise_scale_het_scale" \

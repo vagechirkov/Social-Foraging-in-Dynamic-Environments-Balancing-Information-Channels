@@ -12,7 +12,6 @@ dependencies = [
     "torchrl>=0.6.0",
     "scikit-learn",
     "opencv-python>=4.10.0.84",
-
     # Tools
     "ipykernel>=6.29.5",
     "matplotlib>=3.9",
@@ -28,6 +27,8 @@ dependencies = [
     "streamlit",
     "imageio",
     "pytest>=7.4.0",
+    "optuna>=4.7.0",
+    "optuna-dashboard>=0.20.0",
 ]
 
 [project.optional-dependencies]

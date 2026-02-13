@@ -11,6 +11,9 @@ uv sync --extra cu121
 # uv sync --extra cpu
 
 uv tree
+
+# activate the environment
+source .venv/bin/activate
 ```
 
 See more info [here](https://docs.astral.sh/uv/) and [here](https://docs.astral.sh/uv/guides/integration/pytorch/#configuring-accelerators-with-optional-dependencies).
@@ -24,7 +27,7 @@ sbatch ea_cpu_driver_itb.sh
 
 ## Run 3 channels parameter sweep
 ```bash
-sbatch 3_channel_cpu_driver_itb.sh
+uv run python submit_jobs_3_channel.py
 ```
 
 ```bash
@@ -47,4 +50,17 @@ To run the interactive visualization:
 ```bash
 PYTHONPATH=.
 uv run streamlit run abm/app.py
+```
+
+## Environment Optimization
+To optimize environment parameters (target behavior, sensing noise, etc.) to maximize social benefit:
+
+1. Run the optimization script:
+```bash
+uv run python abm/optimize_environment.py
+```
+
+2. Monitor progress with the Optuna Dashboard:
+```bash
+uv run optuna-dashboard sqlite:///env_optimization_v1.db
 ```

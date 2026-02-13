@@ -6,7 +6,7 @@ import torch
 import hydra
 from omegaconf import DictConfig
 
-from utils import VmasEvaluator, GenePersistenceTransform, SimpleAgent, ExperimentLogger
+from abm.utils import VmasEvaluator, GenePersistenceTransform, SimpleAgent, ExperimentLogger
 
 # Indices in CHANNEL_NAMES = ["Priv", "Belief", "Heading", "Pos", "None", "Consensus"]
 IDX_PRIV = 0

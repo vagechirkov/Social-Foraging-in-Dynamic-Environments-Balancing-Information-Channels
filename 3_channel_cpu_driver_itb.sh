@@ -74,6 +74,7 @@ for n_targets in "${n_targets_array[@]}"; do
                                       "$consensus_selectivity" \
                                       "$channel_y_name" \
                                       "$bias_magnitude"
+                                  done
                                 done
                               done
                             done

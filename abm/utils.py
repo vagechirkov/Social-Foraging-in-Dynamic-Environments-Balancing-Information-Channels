@@ -12,7 +12,7 @@ from tensordict.nn import TensorDictModule
 from torchrl.envs import ParallelEnv, TransformedEnv, VmasEnv
 from torchrl.envs.transforms import Transform
 
-from abm.model import Scenario
+from .model import Scenario
 
 CHANNEL_NAMES = ["Priv", "Belief", "Heading", "Pos", "None", "Consensus"]
 N_CHANNELS = len(CHANNEL_NAMES)
