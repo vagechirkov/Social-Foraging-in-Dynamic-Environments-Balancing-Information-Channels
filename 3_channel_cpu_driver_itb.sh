@@ -22,7 +22,7 @@ relocation_interval_array=(200)
 
 # Costs
 cost_priv=(0.5)                                 # Options: 0.5 0.1 0.02
-cost_belief=(0.1 0.5)                              # Options: 0.01 0.05 0.5 0.1 0.02
+cost_belief=(0.1 0.5)                           # Options: 0.01 0.05 0.5 0.1 0.02
 cost_consensus_array=(0.01)
 
 # Noise

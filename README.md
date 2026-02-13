@@ -27,6 +27,10 @@ sbatch ea_cpu_driver_itb.sh
 sbatch 3_channel_cpu_driver_itb.sh
 ```
 
+```bash
+uv run python3 3_channel_param_exploration
+```
+
 ## RUN EA on GPU cluster
 ```bash
 bash ea_gpu_driver_scioi.sh 

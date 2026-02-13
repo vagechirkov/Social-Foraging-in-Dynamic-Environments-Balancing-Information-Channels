@@ -528,3 +528,5 @@ uv.lock
 outputs/
 abm/multirun/
 multirun/
+*.out
+*.log
