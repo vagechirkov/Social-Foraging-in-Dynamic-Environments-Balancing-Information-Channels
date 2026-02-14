@@ -96,7 +96,8 @@ class Scenario(BaseScenario):
             "cost_heading": kwargs.pop("cost_heading", 0.25),
             "cost_pos": kwargs.pop("cost_pos", 0.1),
             "cost_consensus": kwargs.pop("cost_consensus", 0.5),
-            "consensus_selectivity_threshold": kwargs.pop("consensus_selectivity_threshold", 3.0)
+            "consensus_selectivity_threshold": kwargs.pop("consensus_selectivity_threshold", 3.0),
+            "spot_radius": kwargs.pop("spot_radius", 0.5),
         }
 
         self.targets_quality_type = kwargs.pop("targets_quality", "HM")

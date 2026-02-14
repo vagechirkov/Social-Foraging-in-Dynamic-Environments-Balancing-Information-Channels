@@ -61,6 +61,9 @@ if target_pattern == "levy":
     relocation_interval = st.sidebar.slider("Relocation Interval", 50, 1000, 250)
     persistence = st.sidebar.slider("Persistence (Degrees)", 1, 90, 20)
     t_speed = st.sidebar.slider("Target Speed", 0.01, 1.0, 0.5)
+    
+st.sidebar.header("Sensing")
+spot_radius = st.sidebar.slider("Spotlight Radius", 0.1, 2.0, 0.5)
 
 # --- Session State ---
 if 'env' not in st.session_state:
@@ -72,13 +75,13 @@ def reset_simulation():
     # IMPORTANT: is_interactive must be False so the scenario 
     # doesn't override our actions in Scenario.process_action
     params = {
-        'x_dim': 5, 'y_dim': 5, 
+        'x_dim': 2, 'y_dim': 2, 
         'target_speed': t_speed,
         'n_agents': n_agents, 
         'n_targets': n_targets, 
         'targets_quality': 'HM',
         'is_interactive': False, 
-        'initialization_box_ratio': 0.5,
+        'initialization_box_ratio': 1.0,
         'visualize_semidims': True, 
         'min_dist_between_entities': 0.1,
         'agent_radius': 0.01, 
@@ -86,11 +89,11 @@ def reset_simulation():
         'dist_noise_scale_priv': 0.01,
         'dist_noise_scale_soc': 0,
         'social_trans_scale': 0.01,
-        'belief_selectivity_threshold': 100.,
+        'belief_selectivity_threshold': 0.1,
         'process_noise_scale': 0.05, 
         'cost_priv': 0.0,
         'cost_belief': 0.0,
-        'base_noise': 0.4,
+        'base_noise': 0.1,
         'cost_consensus': 0.0,
         'consensus_selectivity_threshold': 0.1,
         'target_persistence': persistence, 
@@ -98,8 +101,9 @@ def reset_simulation():
         'relocation_interval': relocation_interval, 
         'process_noise_scale_het_ratio': 0, 
         'process_noise_scale_het_scale': 10,
-        'bias_magnitude': 1,
-        'channel_y_name': "Belief"
+        'bias_magnitude': 0,
+        'channel_y_name': "Belief",
+        'spot_radius': spot_radius
     }
     env = VmasEnv(scenario=Scenario(), num_envs=1, device="cpu", **params)
     env.reset()

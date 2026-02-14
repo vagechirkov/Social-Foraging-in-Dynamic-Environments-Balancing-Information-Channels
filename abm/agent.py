@@ -62,18 +62,21 @@ class ForagingAgent(Agent):
             social_info_aggregation: str = "average",  # "average" or "most_useful"
             # --- Physics ---
             momentum: float = 0.9,  # alpha: Gradient smoothing
+            max_belief_uncertainty: float = 20.0,
             # --- Information usage costs ---
             cost_priv: float = 0.1,
             cost_belief: float = 0.5,
             cost_heading: float = 0.25,
             cost_pos: float = 0.1,
             cost_consensus: float = 0.5,
+            spot_radius: float = 0.5,
             *args,
             **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.n_targets = n_targets
         self.momentum = momentum
+        self.spot_radius = spot_radius 
 
         # Sensing Parameters
         self.base_noise = base_noise
@@ -89,6 +92,7 @@ class ForagingAgent(Agent):
         self.belief_selectivity_threshold = belief_selectivity_threshold
         self.consensus_selectivity_threshold = consensus_selectivity_threshold
         self.social_info_aggregation = social_info_aggregation
+        self.max_belief_uncertainty = max_belief_uncertainty
 
         # 3. Energy Costs Vector [Priv, Belief, Heading, Pos, None, Consensus]
         # Used for reward calculation/energy expenditure tracking
@@ -122,6 +126,8 @@ class ForagingAgent(Agent):
         self.obs_target_qual = torch.zeros(batch_dim, n_targets, device=device)
         # Quality Variance R_{q,k}: (batch, n_targets)
         self.obs_target_qual_var = torch.zeros(batch_dim, n_targets, device=device)
+        # Mask for valid target observations (batch, n_targets)
+        self.obs_target_mask = torch.ones(batch_dim, n_targets, device=device, dtype=torch.bool)
         # A boolean mask: True = Update this target, False = Skip (act as None)
         # Shape: (batch, n_targets)
         self.obs_validity_mask = torch.ones(batch_dim, device=device, dtype=torch.bool)
@@ -131,7 +137,7 @@ class ForagingAgent(Agent):
         self.belief_target_pos = torch.zeros(batch_dim, n_targets, 2, device=device)
         # Covariances Sigma_{i,k}: (batch, n_targets, 2, 2)
         # Initialize with identity matrices to represent initial uncertainty
-        self.belief_target_covariance = torch.eye(2, device=device).expand(batch_dim, n_targets, 2, 2)
+        self.belief_target_covariance = torch.eye(2, device=device).reshape(1, 1, 2, 2).repeat(batch_dim, n_targets, 1, 1)
 
         # Quality weights q_{i,k}: (batch, n_targets)
         self.belief_target_qual = torch.zeros(batch_dim, n_targets, device=device)
@@ -224,7 +230,119 @@ class AgentObservations:
             # Report the estimated variance for quality as well
             target_qual_var[:, i] = var_conservative
 
+        agent.obs_target_mask[indices] = True
         return target_pos, target_covariance, target_qual, target_qual_var
+
+    @staticmethod
+    def private_spotlight(agent, targets, indices=None, spot_radius: float = 0.5):
+        """
+        Active 'Spotlight' Sensing using Thompson Sampling.
+        1. Selects WHERE to look based on current belief uncertainty/quality.
+        2. If 'Miss': Updates Quality -> 0, Position -> No Update.
+        3. If 'Hit': Updates both with high precision.
+        """
+        device = agent.device
+        if indices is None:
+            indices = torch.arange(agent.batch_dim, device=device)
+        batch_dim = len(indices)
+        
+        # Select WHICH target to verify
+        # We sample a target index 'k' proportional to estimated quality.
+        # Add epsilon to ensure we can explore even low-quality beliefs initially.
+        probs = torch.clamp(agent.belief_target_qual[indices], min=1e-6)
+        # Sample one index per agent in batch
+        # selected_k: (batch, 1)
+        selected_k_idx = torch.multinomial(probs, 1)
+
+        # Generate 'Look' Coordinate (Hypothesis)
+        # Gather mu and sigma for the selected k
+        # mu: (batch, 1, 2)
+        sel_mu = torch.gather(agent.belief_target_pos[indices], 1, 
+                              selected_k_idx.unsqueeze(-1).expand(-1, 1, 2))
+        # sigma: (batch, 1, 2, 2)
+        sel_sigma = torch.gather(agent.belief_target_covariance[indices], 1, 
+                                 selected_k_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, 1, 2, 2))
+        
+        # Sample look position ~ N(mu_k, Sigma_k)
+        noise = torch.randn(batch_dim, 1, 2, device=device)
+
+        try:
+             L = torch.linalg.cholesky(sel_sigma.squeeze(1)) # (batch, 2, 2)
+             look_pos = sel_mu.squeeze(1) + torch.matmul(L, noise.squeeze(1).unsqueeze(-1)).squeeze(-1)
+        except:
+             # Fallback if sigma not positive definite
+             std = torch.sqrt(torch.diagonal(sel_sigma.squeeze(1), dim1=-2, dim2=-1))
+             look_pos = sel_mu.squeeze(1) + noise.squeeze(1) * std
+ 
+        # Physics Check (The Spotlight)
+        # Check against the GROUND TRUTH of the specific target we think this is.
+        
+        # Gather true position of the selected target
+        # targets is a list of objects, we need to stack them first
+        all_true_pos = torch.stack([t.state.pos[indices] for t in targets], dim=1) # (batch, n_targets, 2)
+        all_true_qual = torch.stack([t.quality[indices] for t in targets], dim=1)  # (batch, n_targets)
+        
+        true_pos_k = torch.gather(all_true_pos, 1, selected_k_idx.unsqueeze(-1).expand(-1, 1, 2)).squeeze(1)
+        true_qual_k = torch.gather(all_true_qual, 1, selected_k_idx).squeeze(1)
+
+        # Calculate Distance: Look Position vs True Position
+        dist_err = torch.norm(look_pos - true_pos_k, dim=1)
+        
+        # Determine Hit vs Miss
+        is_hit = dist_err < spot_radius
+        
+        # --- 4. Construct Observations (Gated Noise) ---
+        TINY_VAR = 1e-2  # High confidence at distance 0
+        
+        # Initialize output containers (zeros are fine since mask handles selection)
+        out_pos = torch.zeros(batch_dim, agent.n_targets, 2, device=device)
+        out_cov = torch.zeros(batch_dim, agent.n_targets, 2, 2, device=device)
+        out_q = torch.zeros(batch_dim, agent.n_targets, device=device)
+        out_q_var = torch.zeros(batch_dim, agent.n_targets, device=device)
+
+        # HIT CASE:
+        # Pos: True Position
+        # Qual: True Quality
+        # Var: Attenuated by distance
+        
+        # Calculate distance for attenuation
+        agent_pos = agent.state.pos[indices]
+        dist_to_target = torch.norm(agent_pos - true_pos_k, dim=1) # (batch,)
+        
+        # Scale sigma based on distance (Linear Attenuation)
+        # sigma = sigma_0 + beta * d
+        # We start with sqrt(TINY_VAR) to ensure base precision is high
+        sigma_spot = torch.sqrt(torch.tensor(TINY_VAR, device=device)) + agent.dist_noise_scale_priv * dist_to_target
+        var_spot = sigma_spot ** 2
+        
+        # MISS CASE:
+        # Handled by mask=False -> No Update
+        
+        # Data for selected k (Assume Hit values, Mask filters Misses)
+        obs_p = true_pos_k 
+        var_p = var_spot.expand(batch_dim)
+        
+        obs_q = true_qual_k
+        var_q = var_spot.expand(batch_dim)
+        
+        # Scatter into full tensors
+        out_pos.scatter_(1, selected_k_idx.unsqueeze(-1).expand(-1, 1, 2), obs_p.unsqueeze(1))
+        
+        cov_eye = torch.eye(2, device=device).unsqueeze(0).expand(batch_dim, -1, -1)
+        cov_k = cov_eye * var_p.unsqueeze(-1).unsqueeze(-1)
+        out_cov.scatter_(1, selected_k_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, 1, 2, 2), cov_k.unsqueeze(1))
+        
+        out_q.scatter_(1, selected_k_idx, obs_q.unsqueeze(1))
+        out_q_var.scatter_(1, selected_k_idx, var_q.unsqueeze(1))
+
+        mask = torch.zeros(batch_dim, agent.n_targets, device=device, dtype=torch.bool)
+        # Only update if IT IS A HIT
+        # If Miss -> Mask remains False -> No Update
+        hit_mask = is_hit.unsqueeze(1) # (batch, 1)
+        mask.scatter_(1, selected_k_idx, hit_mask)
+        agent.obs_target_mask[indices] = mask
+
+        return out_pos, out_cov, out_q, out_q_var
 
     @staticmethod
     def others_belief(agent, other_agents, other_agent_mask, indices=None):
@@ -359,6 +477,7 @@ class AgentObservations:
         # Quality Variance R_q
         target_qual_var = var_trans.unsqueeze(1).expand(-1, n_targets)
 
+        agent.obs_target_mask[indices] = True
         return target_pos, target_covariance, target_qual, target_qual_var
 
     @staticmethod
@@ -450,6 +569,10 @@ class AgentObservations:
         target_qual_var.scatter_(1, best_target_idx.unsqueeze(1),
                                  torch.tensor(var_heading, device=device).expand(batch_dim, 1))
 
+        mask = torch.zeros(batch_dim, n_targets, device=device, dtype=torch.bool)
+        mask.scatter_(1, best_target_idx.unsqueeze(1), True)
+        agent.obs_target_mask[indices] = mask
+
         return target_pos, target_covariance, target_qual, target_qual_var
 
     @staticmethod
@@ -509,6 +632,10 @@ class AgentObservations:
         target_qual.scatter_(1, best_target_idx.unsqueeze(1), o_q_star.unsqueeze(1))
         target_qual_var.scatter_(1, best_target_idx.unsqueeze(1),
                                  torch.tensor(var_pos, device=device).expand(batch_dim, 1))
+
+        mask = torch.zeros(batch_dim, n_targets, device=device, dtype=torch.bool)
+        mask.scatter_(1, best_target_idx.unsqueeze(1), True)
+        agent.obs_target_mask[indices] = mask
 
         return target_pos, target_covariance, target_qual, target_qual_var
 
@@ -730,7 +857,8 @@ class AgentObservations:
         is_more_certain = variance_agg < (variance_self * agent.consensus_selectivity_threshold)
         
         agent.obs_validity_mask[indices] = is_more_certain.any(dim=1)
-        
+
+        agent.obs_target_mask[indices] = True
         return agg_mu, agg_cov, agg_qual, agg_qual_var
 
 
@@ -741,6 +869,7 @@ def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: Li
     """
     # reset validity mask
     agent.obs_validity_mask[:] = True
+    agent.obs_target_mask[:] = False
     # get the most recent actions
     channel_indices = agent.action.u[:, 0].long()
 
@@ -751,7 +880,8 @@ def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: Li
 
     # Channel 4: None (observations remain the same; belief is not updated).
     channel_observation_functions = {
-        0: partial(AgentObservations.private, targets=targets),
+        # 0: partial(AgentObservations.private, targets=targets),
+        0: partial(AgentObservations.private_spotlight, targets=targets, spot_radius=agent.spot_radius),
         1: partial(AgentObservations.others_belief, other_agents=other_agents,
                    other_agent_mask=random_other_agent_ind),
         2: partial(AgentObservations.others_heading, other_agents=other_agents,
@@ -784,6 +914,26 @@ def add_process_noise_to_belief(agent: ForagingAgent, target_speed):
     # Add process noise to current belief
     agent.belief_target_covariance = agent.belief_target_covariance + Q
 
+    # Clamp covariance to prevent infinite growth
+    # We want to clamp the diagonal elements (variances) to max_belief_uncertainty
+    # The off-diagonal elements (covariances) are implicitly limited by the variances
+    # but strictly speaking we only clamp the diagonal here for simplicity.
+    # shape: (batch, n_targets, 2, 2)
+    # We can clamp the entire matrix or just diagonal. Clamping diagonal is safer to maintain positive definiteness if we are careful,
+    # but simple clamping of the whole matrix might destroy PSD property if not careful.
+    # However, since we are only adding positive diagonal noise, the diagonal is what grows unbounded.
+    
+    # Efficiently clamp diagonal:
+    # We can separate diagonal and off-diagonal, clamp diagonal, and recombine.
+    # Or simpler: just clamp the whole thing if we assume off-diagonals don't grow without bound if diagonals are bounded (which is true for correlation <= 1).
+    # But let's be precise: covariance <= sqrt(var1*var2). If var is bounded, cov is bounded.
+    # So we only STRICTLY need to clamp diagonal.
+    
+    mask = torch.eye(2, device=agent.device).bool().view(1, 1, 2, 2)
+    diag = agent.belief_target_covariance.masked_select(mask)
+    clamped_diag = torch.clamp(diag, max=agent.max_belief_uncertainty)
+    agent.belief_target_covariance.masked_scatter_(mask, clamped_diag)
+
     # Also add process noise to quality variance (assuming quality might drift slightly)
     # agent.belief_target_qual_var = agent.belief_target_qual_var + (Q_scale ** 2)
 
@@ -798,23 +948,26 @@ def update_belief(agent: ForagingAgent):
     Updates the internal GMM belief state using Kalman Filters for both
     spatial (vector) and quality (scalar) components.
     """
-    # 1. Identify agents to update
+    # 1. Identify agents/targets to update
     # Channels: 0: Private, 1: Belief, 2: Heading, 3: Pos, 4: None
-    update_mask = (agent.action.u[:, 0].long() != 4) & agent.obs_validity_mask
-    update_indices = torch.nonzero(update_mask).flatten()
+    agent_active_mask = (agent.action.u[:, 0].long() != 4) & agent.obs_validity_mask
+    
+    # Combined mask: (batch, n_targets)
+    # Only update if agent is active AND target observation is valid
+    update_mask = agent_active_mask.unsqueeze(1) & agent.obs_target_mask
 
-    if update_indices.numel() == 0:
+    if not update_mask.any():
         return
 
     # TARGET POSITION UPDATE
-    # Sigma_t: (batch, n_targets, 2, 2)
-    sigma_t = agent.belief_target_covariance[update_indices]
+    # Sigma_t: (batch, n_targets, 2, 2) -> (n_updates, 2, 2)
+    sigma_t = agent.belief_target_covariance[update_mask]
     # R_k (Sigma_obs): (batch, n_targets, 2, 2)
-    R_k = agent.obs_target_covariance[update_indices]
+    R_k = agent.obs_target_covariance[update_mask]
     # mu_t: (batch, n_targets, 2)
-    mu_t = agent.belief_target_pos[update_indices]
+    mu_t = agent.belief_target_pos[update_mask]
     # z_k: (batch, n_targets, 2)
-    z_k = agent.obs_target_pos[update_indices]
+    z_k = agent.obs_target_pos[update_mask]
 
     # 1. Kalman Gain Calculation
     # Innovation Covariance S = Sigma_t + R_k
@@ -831,34 +984,34 @@ def update_belief(agent: ForagingAgent):
     # correction = K * y
     correction = torch.matmul(K, y).squeeze(-1)
 
-    agent.belief_target_pos[update_indices] = mu_t + correction
+    agent.belief_target_pos[update_mask] = mu_t + correction
 
     # 3. Update Covariance
     # Sigma_{t+1} = (I - K) * Sigma_t
-    I = torch.eye(2, device=agent.device).view(1, 1, 2, 2).expand_as(K)
-    agent.belief_target_covariance[update_indices] = torch.matmul(I - K, sigma_t)
+    I = torch.eye(2, device=agent.device).unsqueeze(0).expand_as(K)
+    agent.belief_target_covariance[update_mask] = torch.matmul(I - K, sigma_t)
 
     # QUALITY UPDATE
     # sigma^2_{q, i, k} (batch, n_targets)
-    sigma_q_t = agent.belief_target_qual_var[update_indices]
+    sigma_q_t = agent.belief_target_qual_var[update_mask]
     # R_{q,k} (batch, n_targets)
-    R_q_k = agent.obs_target_qual_var[update_indices]
+    R_q_k = agent.obs_target_qual_var[update_mask]
     # q_t (batch, n_targets)
-    q_t = agent.belief_target_qual[update_indices]
+    q_t = agent.belief_target_qual[update_mask]
     # o_{q,k} (batch, n_targets)
-    o_q = agent.obs_target_qual[update_indices]
+    o_q = agent.obs_target_qual[update_mask]
 
     # 1. Kalman Gain Calculation
     # K_{q,k} = sigma^2_t / (sigma^2_t + R_{q,k})
-    K_q = sigma_q_t / torch.clamp(sigma_q_t + R_q_k, 1e-8) # Avoid div by zero
+    K_q = sigma_q_t / torch.clamp(sigma_q_t + R_q_k, min=1e-8) # Avoid div by zero
 
     # 2. Update Mean
     # q_{t+1} = q_t + K_q * (o_q - q_t)
-    agent.belief_target_qual[update_indices] = q_t + K_q * (o_q - q_t)
+    agent.belief_target_qual[update_mask] = q_t + K_q * (o_q - q_t)
 
     # 3. Update Variance
     # sigma^2_{t+1} = (1 - K_q) * sigma^2_t
-    agent.belief_target_qual_var[update_indices] = (1 - K_q) * sigma_q_t
+    agent.belief_target_qual_var[update_mask] = (1 - K_q) * sigma_q_t
 
 
 def compute_gradient(agent: ForagingAgent):

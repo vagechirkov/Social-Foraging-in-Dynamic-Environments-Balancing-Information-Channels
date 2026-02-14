@@ -64,3 +64,8 @@ uv run python abm/optimize_environment.py
 ```bash
 uv run optuna-dashboard sqlite:///env_optimization_v1.db
 ```
+
+3. Run on Slurm Cluster:
+```bash
+sbatch optimize_environment_hpc.sh
+```

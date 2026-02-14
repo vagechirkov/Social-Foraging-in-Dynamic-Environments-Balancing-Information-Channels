@@ -166,14 +166,8 @@ def run_exploration(cfg: DictConfig):
         dist = math.sqrt((p_p - target_p_priv)**2 + (p_n - target_p_none)**2)
         if dist < best_dist:
             best_dist = dist
-            midpoint = avg_score
+            midpoint = None # avg_score
             chosen_config = config
-    
-    if chosen_config:
-        print(f"Midpoint target: priv={target_p_priv}, none={target_p_none}")
-        print(f"Closest point found: priv={chosen_config[0]:.4f}, bel={chosen_config[1]:.4f}, none={chosen_config[2]:.4f} "
-              f"(dist={best_dist:.4f})")
-        print(f"Using midpoint value {midpoint:.4f} for colormap normalization.")
     
     logger.log_ternary_plot(plot_data, cfg.resolution, midpoint=midpoint)
     logger.finish()

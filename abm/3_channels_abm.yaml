@@ -33,6 +33,7 @@ social_trans_scale: 0.0  # gamma belief
 belief_selectivity_threshold: 3.0  # Mahalanobis distance
 consensus_selectivity_threshold: 3.0
 bias_magnitude: 0.5
+spot_radius: 0.5
 
 
 # other params
@@ -41,7 +42,7 @@ process_noise_scale: 0.02
 process_noise_scale_het_ratio: 0.0
 process_noise_scale_het_scale: 1.0
 momentum: 0.9
-initialization_box_ratio: 0.5
+initialization_box_ratio: 1.0
 min_dist_between_entities: 0.001
 agent_radius: 0.05
 continuous_actions: True

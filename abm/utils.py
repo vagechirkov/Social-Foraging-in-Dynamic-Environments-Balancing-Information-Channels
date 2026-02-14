@@ -552,14 +552,14 @@ class ExperimentLogger:
         if norm is not None:
             cs = ax.tripcolor(bel, priv, none, scores, cmap=cmap, norm=norm, shading='flat')
         else:
-            cs = ax.tripcolor(bel, priv, none, scores, vmin=0, vmax=1, cmap=cmap, shading='flat')
+            cs = ax.tripcolor(bel, priv, none, scores, cmap=cmap, shading='flat')
         # ax.grid(alpha=0.2)
         ax.grid(axis='t', color='w')
         ax.grid(axis='l', color='w', linestyle='--')
         ax.grid(axis='r', color='w', linestyle=':')
 
         cax = ax.inset_axes([1.05, 0.1, 0.05, 0.9], transform=ax.transAxes)
-        fig.colorbar(cs, label="Average Fitness", ticks=np.linspace(0, 1, 11), cax=cax)
+        fig.colorbar(cs, label="Average Fitness", cax=cax)  # , ticks=np.linspace(0, 1, 11)
 
         ax.set_tlabel("Belief")
         ax.set_llabel("Private")

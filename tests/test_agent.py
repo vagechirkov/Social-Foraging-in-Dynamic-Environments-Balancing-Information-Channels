@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import os
-from abm.agent import invert_2x2_matrix, ForagingAgent, AgentObservations, TargetAgent
+from abm.agent import invert_2x2_matrix, ForagingAgent, AgentObservations, TargetAgent, add_process_noise_to_belief
 from abm.model import Scenario
 from vmas import make_env
 from vmas.simulator.core import World, Sphere
@@ -524,3 +524,64 @@ def test_target_levy_movement(device):
     plt.close(fig)
 
     print("Target Lévy flight verification successful! Plot saved to tests/visuals/levy_flight_verification.png")
+
+
+def test_max_belief_uncertainty(device):
+    """
+    Verify that belief uncertainty (covariance) is clamped at max_belief_uncertainty.
+    """
+    batch_dim = 1
+    n_targets = 1
+    max_uncertainty = 5.0
+    
+    agent = ForagingAgent(
+        batch_dim=batch_dim,
+        device=device,
+        n_targets=n_targets,
+        name="test_agent_uncertainty",
+        process_noise_scale=0.1,
+        max_speed=0.05,
+        max_belief_uncertainty=max_uncertainty
+    )
+    
+    # Track covariance trace over time
+    traces = []
+    steps = 1000
+    
+    for _ in range(steps):
+        add_process_noise_to_belief(agent, target_speed=0.1)
+        cov = agent.belief_target_covariance[0, 0].detach().cpu().numpy()
+        traces.append(np.trace(cov))
+
+    final_cov = agent.belief_target_covariance[0, 0]
+    final_diag = final_cov.diagonal()
+    
+    # --- Visualization ---
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.plot(traces, label='Covariance Trace')
+    ax.axhline(y=max_uncertainty * 2, color='r', linestyle='--', label='Expected Max Trace (2 * max_unc)')
+    # Note: If max_belief_uncertainty caps diagonal elements, the trace (sum of diagonals) 
+    # should be capped at 2 * max_belief_uncertainty.
+    
+    ax.set_title("Belief Uncertainty Growth and Clamping")
+    ax.set_xlabel("Steps")
+    ax.set_ylabel("Covariance Trace")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    os.makedirs("tests/visuals", exist_ok=True)
+    plt.savefig("tests/visuals/uncertainty_clamping_verification.png")
+    plt.close(fig)
+
+    print(f"Final Diagonal: {final_diag}")
+    
+    # Check if clamped
+    # Allow small numerical error margin
+    assert torch.all(final_diag <= max_uncertainty + 1e-4), \
+        f"Variance exceeded max {max_uncertainty}: {final_diag}"
+    
+    # Check if it actually reached the cap (or close to it) 
+    # It should have reached it long before 1000 steps
+    assert torch.all(final_diag >= max_uncertainty - 0.1), \
+        f"Variance did not reach max {max_uncertainty}: {final_diag}"
+
