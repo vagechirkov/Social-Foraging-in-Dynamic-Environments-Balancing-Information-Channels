@@ -6,7 +6,7 @@ use_wandb: false
 use_gpu: false
 
 # Exploration settings
-replicates: 50
+replicates: 10
 n_trials: 1000
 n_envs: 256 # Will be overridden by script to match total population
 channel_y_name: "Belief"
@@ -20,24 +20,25 @@ targets_quality: "HM"
 target_persistence: 20
 target_movement_pattern: "levy"
 relocation_interval: 200
-max_steps: 1000
+max_steps: 3000
 target_speed: 0.7
 
 # Costs
-cost_priv: 0.5
-cost_belief: 0.1
+cost_priv: 0.0
+cost_belief: 0.0
 cost_heading: 0.0
 cost_pos: 0.0
-cost_consensus: 0.01
+cost_consensus: 0.0
 
 # Noise & Selectivity
 base_noise: 0.1
 dist_noise_scale_priv: 0.1
 dist_noise_scale_soc: 0.0  # beta belief
 social_trans_scale: 0.01  # gamma belief
-belief_selectivity_threshold: 100.0
+belief_selectivity_threshold: 1.0
 consensus_selectivity_threshold: 1.0
-bias_magnitude: 0.1
+bias_magnitude: 0.0
+spot_radius: 0.5
 
 # Process Noise
 process_noise_scale: 0.05
@@ -46,7 +47,7 @@ process_noise_scale_het_scale: 10.0
 
 # Other
 momentum: 0.9
-initialization_box_ratio: 0.5
+initialization_box_ratio: 1.0
 min_dist_between_entities: 0.001
 agent_radius: 0.05
 continuous_actions: True

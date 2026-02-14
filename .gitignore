@@ -530,3 +530,5 @@ abm/multirun/
 multirun/
 *.out
 *.log
+*.db
+best_env_params.yaml
