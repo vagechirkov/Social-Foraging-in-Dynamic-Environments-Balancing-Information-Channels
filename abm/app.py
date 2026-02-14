@@ -38,32 +38,32 @@ except ImportError as e:
 # st.sidebar.header("Simulation Settings")
 n_agents = st.sidebar.slider("Number of Agents", 1, 50, 10)
 n_targets = st.sidebar.slider("Number of Targets", 1, 10, 1)
-fps = st.sidebar.slider("FPS Limit", 1, 260, 100)
-plot_size = st.sidebar.slider("Plot Size", 6, 20, 12)
+spot_radius = st.sidebar.slider("Spotlight Radius", 0.1, 2.0, 0.5)
 
-st.sidebar.header("Movement Distribution")
 p_none = st.sidebar.slider("P(None)", 0.0, 1.0, 0.0)
 p_private = st.sidebar.slider("P(Private)", 0.0, 1.0, 0.1)
 p_belief = st.sidebar.slider("P(Belief)", 0.0, 1.0, 0.9)
-p_consensus = st.sidebar.slider("P(Consensus)", 0.0, 1.0, 0.0)
+# p_consensus = st.sidebar.slider("P(Consensus)", 0.0, 1.0, 0.0)
+p_consensus = 0.0
 
-st.sidebar.header("Target Behavior")
 target_pattern = st.sidebar.selectbox("Target Movement Pattern", ["crw", "periodically_relocate", "levy"], index=0)
 if target_pattern == "periodically_relocate":
     relocation_interval = st.sidebar.slider("Relocation Interval", 50, 1000, 250)
     persistence = 1 
     t_speed = 0.1 # Default for relocation
 elif target_pattern == "crw":
-    persistence = st.sidebar.slider("Persistence (Degrees)", 1, 90, 50)
-    t_speed = st.sidebar.slider("Target Speed", 0.01, 1.0, 0.3)
+    persistence = st.sidebar.slider("Persistence (Degrees)", 1, 90, 25)
+    t_speed = st.sidebar.slider("Target Speed", 0.01, 2.0, 0.3)
     relocation_interval = 250
 if target_pattern == "levy":
     relocation_interval = st.sidebar.slider("Relocation Interval", 50, 1000, 250)
     persistence = st.sidebar.slider("Persistence (Degrees)", 1, 90, 20)
-    t_speed = st.sidebar.slider("Target Speed", 0.01, 1.0, 0.5)
-    
-st.sidebar.header("Sensing")
-spot_radius = st.sidebar.slider("Spotlight Radius", 0.1, 2.0, 0.5)
+    t_speed = st.sidebar.slider("Target Speed", 0.01, 2.0, 0.5)
+
+
+# fps = st.sidebar.slider("FPS Limit", 1, 260, 100)
+fps = 100
+plot_size = st.sidebar.slider("Plot Size", 6, 20, 12)
 
 # --- Session State ---
 if 'env' not in st.session_state:
@@ -86,7 +86,7 @@ def reset_simulation():
         'min_dist_between_entities': 0.1,
         'agent_radius': 0.01, 
         'max_speed': 0.05,
-        'dist_noise_scale_priv': 0.01,
+        'dist_noise_scale_priv': 0.5,
         'dist_noise_scale_soc': 0,
         'social_trans_scale': 0.01,
         'belief_selectivity_threshold': 0.1,
