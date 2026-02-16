@@ -118,11 +118,10 @@ def run_experiment(cfg: DictConfig):
     
     work_cfg = cfg.copy()
     
-    # Define the sequence of environments
-    # Default full cycle
-    env_keys = ["baseline", "noisy_private", "fast_target"]
+    env_keys = sorted(list(cfg.environments.categories.keys()))
+    print(f"Loaded Environment Categories: {env_keys}")
     
-    # If dynamic mode and static_category implies a pair (e.g. "baseline-fast_target")
+    # If dynamic mode and static_category implies a pair (e.g. "solitary-collective")
     if cfg.environment.mode == "dynamic" and "-" in cfg.environment.static_category:
         pair_keys = cfg.environment.static_category.split("-")
         # Validate keys
@@ -180,7 +179,12 @@ def run_experiment(cfg: DictConfig):
     # Re-initialize logger with correct config
     logger = ExperimentLogger(work_cfg.use_wandb, work_cfg, save_fig_locally=False, frozen_indices=frozen_indices)
 
-    ga = GeneticAlgorithm(n_channels=6, frozen_indices=frozen_indices)
+    ga = GeneticAlgorithm(
+        n_channels=6,
+        frozen_indices=frozen_indices,
+        cxpb=0,  # disable crossover
+        mutpb=1.0  # always mutate
+    )
     
     if work_cfg.use_wandb:
         wandb.config.update({

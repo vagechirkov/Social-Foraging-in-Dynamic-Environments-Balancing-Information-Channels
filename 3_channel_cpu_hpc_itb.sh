@@ -40,7 +40,7 @@ category_name=${21}
 python abm/3_channels_abm_exploration.py \
     --m n_agents="$n_agents" \
     n_targets="$n_targets" \
-    max_steps=5000 \
+    max_steps=1000 \
     replicates=100 \
     run_name="$category_name" \
     target_speed="$t_speed" \
@@ -54,7 +54,7 @@ python abm/3_channels_abm_exploration.py \
     base_noise="$base_noise" \
     dist_noise_scale_priv="$dist_noise_scale_priv" \
     target_persistence="$target_persistence" \
-    target_movement_pattern="levy" \
+    target_movement_pattern="crw" \
     relocation_interval="$relocation_interval" \
     process_noise_scale_het_ratio="$process_noise_scale_het_ratio" \
     process_noise_scale_het_scale="$process_noise_scale_het_scale" \

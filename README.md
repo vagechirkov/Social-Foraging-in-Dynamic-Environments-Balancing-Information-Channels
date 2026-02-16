@@ -55,9 +55,12 @@ PYTHONPATH=. uv run abm/info_channels_ea.py environment.mode="static" environmen
 
 ### 3. HPC Execution (Slurm)
 To run the full suite of experiments (Dynamic + All Static Baselines) on a Slurm cluster:
+
 ```bash
-sbatch ea_cpu_driver_itb.sh
+uv run python submit_ea.py --dry-run
+uv run python submit_ea.py
 ```
+
 This script submits:
 - One job for the **Dynamic** pipeline.
 - Separate jobs for each **Static** environment category (`baseline`, `noisy_private`, `fast_target`).
@@ -69,7 +72,7 @@ uv run python submit_jobs_3_channel.py
 
 ## Run 3 channels parameter sweep for each environment category
 ```bash
-bash 3_channel_categories_driver.sh
+uv run python submit_categories.py
 ```
 
 ## RUN EA on GPU cluster
