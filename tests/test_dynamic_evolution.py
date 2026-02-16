@@ -62,7 +62,6 @@ def test_environment_switching(MockLogger, MockGA, MockEvaluator):
         "environments": {
             "categories": {
                 "baseline": {"target_speed": 0.1},
-                "high_cost": {"target_speed": 1.0}
             }
         },
         # Add missing genetic algorithm params that might be needed

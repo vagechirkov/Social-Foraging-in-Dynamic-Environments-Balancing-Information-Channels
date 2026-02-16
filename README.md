@@ -60,7 +60,7 @@ sbatch ea_cpu_driver_itb.sh
 ```
 This script submits:
 - One job for the **Dynamic** pipeline.
-- Separate jobs for each **Static** environment category (`baseline`, `high_cost`, `noisy_private`, `fast_target`).
+- Separate jobs for each **Static** environment category (`baseline`, `noisy_private`, `fast_target`).
 
 ## Run 3 channels parameter sweep
 ```bash

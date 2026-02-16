@@ -119,7 +119,19 @@ def run_experiment(cfg: DictConfig):
     work_cfg = cfg.copy()
     
     # Define the sequence of environments
-    env_keys = ["baseline", "high_cost", "noisy_private", "fast_target"]
+    # Default full cycle
+    env_keys = ["baseline", "noisy_private", "fast_target"]
+    
+    # If dynamic mode and static_category implies a pair (e.g. "baseline-fast_target")
+    if cfg.environment.mode == "dynamic" and "-" in cfg.environment.static_category:
+        pair_keys = cfg.environment.static_category.split("-")
+        # Validate keys
+        valid_keys = [k for k in pair_keys if k in cfg.environments.categories]
+        if len(valid_keys) == 2:
+            print(f"Dynamic Mode: Oscillating between pair {valid_keys}")
+            env_keys = valid_keys
+        else:
+             print(f"Warning: Invalid pair specified {cfg.environment.static_category}. Fallback to full cycle.")
     
     def apply_env_category(target_cfg, category_name):
         """Applies parameters from a category to the config."""
@@ -145,7 +157,11 @@ def run_experiment(cfg: DictConfig):
         
     # Init Logger
     work_cfg.project_name = cfg.project_name # "dynamic_evolution_v1"
-    work_cfg.run_name = f"{cfg.environment.mode}_{cfg.run_name}"
+    
+    if cfg.environment.mode == "dynamic" and "-" in cfg.environment.static_category:
+         work_cfg.run_name = f"{cfg.environment.mode}_{cfg.environment.static_category}_{cfg.run_name}"
+    else:
+         work_cfg.run_name = f"{cfg.environment.mode}_{cfg.run_name}"
     
     # Total Agents = Replicates * N_Agents
     # Each replicate is an "island" in the islands list

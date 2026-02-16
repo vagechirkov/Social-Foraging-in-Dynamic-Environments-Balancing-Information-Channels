@@ -6,7 +6,7 @@
 #SBATCH --partition=long                            # Partition to submit to
 #SBATCH --nodes=1                                   # Ensure it runs on one node
 #SBATCH --ntasks=1                                  # Run a single task
-#SBATCH --cpus-per-task=64                          # Request 64 CPUs
+#SBATCH --cpus-per-task=60                          # Request 60 CPUs
 #SBATCH --mem=128G                                   # Memory allocation
 
 
@@ -25,7 +25,7 @@ echo "Category: $category"
 uv run abm/info_channels_ea.py \
     environment.mode="$mode" \
     environment.static_category="$category" \
-    +evolution.replicates=100 \
-    +evolution.generations=1000 \
+    evolution.replicates=60 \
+    evolution.generations=1000 \
     project_name="dynamic_evolution_v1" \
-    run_name="ea_pop_100"
+    run_name="ea_pop_60"
