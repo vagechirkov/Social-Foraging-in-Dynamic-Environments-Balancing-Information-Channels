@@ -1,41 +1,92 @@
 # Experiment
-project_name: "info_channels_ea_3_channels"
-run_name: "omega_3_ea"
+project_name: "dynamic_evolution_v1"
+run_name: "dynamic_ea"
 seed: 42
 use_wandb: true
-use_gpu: true
-log_freq: 10
+use_gpu: false
+log_freq: 1
+plot_freq: 10
+
+# Evolution Settings
+evolution:
+  generations: 1000
+  replicates: 60
+  switch_interval: 250
+  
+# Environment Configuration
+environment:
+  mode: "dynamic" # Options: "dynamic", "static"
+  static_category: "baseline" # Only used if mode is "static"
+
+environments:
+  categories:
+    baseline:
+      target_speed: 0.5
+      cost_priv: 0.1
+      cost_belief: 0.1
+      spot_radius: 2.0
+      dist_noise_scale_priv: 0.05
+    
+    fast_target:
+      target_speed: 0.9
+      cost_priv: 0.5
+      cost_belief: 0.1
+      spot_radius: 0.5
+      dist_noise_scale_priv: 1.0
+
+    high_cost:
+      target_speed: 0.9
+      cost_priv: 2.0
+      cost_belief: 0.1
+      spot_radius: 0.5
+      dist_noise_scale_priv: 0.5
+
+    noisy_private:
+      target_speed: 0.5
+      cost_priv: 0.5
+      cost_belief: 0.1
+      spot_radius: 1.0
+      dist_noise_scale_priv: 2.0
 
 # Genetic Algorithm / Exploration Settings
-ngen: 50
-n_envs: 100
-top_k: 10
-migration_freq: 5
-n_migrants: 2
+ngen: ${evolution.generations} # usage of hydra interpolation if possible, otherwise mapped in code
+n_envs: ${evolution.replicates}
+top_k: 5
+
 
 # parameters
-x_dim: 5
-y_dim: 5
-n_agents: 10
+x_dim: 2
+y_dim: 2
+n_agents: 20
 n_targets: 1
 targets_quality: "HM"
-max_steps: 100
-target_speed: 0.3
-cost_priv: 0.9
-cost_belief: 0.05
+max_steps: 1000 # 5000 simulation steps per generation
+target_persistence: 20
+target_movement_pattern: "crw"
+relocation_interval: 1000
+
+# Default values (can be overridden by environment categories)
+target_speed: 0.1
+cost_priv: 0.5
+cost_belief: 0.1
 cost_heading: 0.0
 cost_pos: 0.0
-dist_noise_scale_priv: 2.0  # beta private
-dist_noise_scale_soc: 0.0  # beta belief
-social_trans_scale: 1.0  # gamma belief
-belief_selectivity_threshold: 2.0  # Mahalanobis distance
-
+dist_noise_scale_priv: 0.5
+dist_noise_scale_soc: 0.0 
+social_trans_scale: 0.01 
+belief_selectivity_threshold: 0.25
+consensus_selectivity_threshold: 3.0
+cost_consensus: 0.0
+bias_magnitude: 0.0
+spot_radius: 0.5
 
 # other params
 base_noise: 0.1
 process_noise_scale: 0.05
+process_noise_scale_het_ratio: 0.0
+process_noise_scale_het_scale: 1.0
 momentum: 0.9
-initialization_box_ratio: 0.5
+initialization_box_ratio: 1.0
 min_dist_between_entities: 0.001
 agent_radius: 0.05
 continuous_actions: True

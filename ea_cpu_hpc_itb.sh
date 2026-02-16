@@ -15,16 +15,17 @@ source .venv/bin/activate
 # add current directory to python path
 export PYTHONPATH=$PYTHONPATH:.
 
-t_speed=$1
+mode=$1
+category=$2
+
+echo "Running Evolutionary Pipeline:"
+echo "Mode: $mode"
+echo "Category: $category"
 
 uv run abm/info_channels_ea.py \
-    --n_agents 100 \
-    --target_speed="$t_speed" \
-    --episode_len 3000 \
-    --pop_size 64 \
-    --ngen 1000 \
-    --top_k 5 \
-    --dim 3 \
-    --costs 0.05 0.02 0.01 0.005 \
-    --use_wandb \
-    --run_name="init_explor"
+    environment.mode="$mode" \
+    environment.static_category="$category" \
+    +evolution.replicates=100 \
+    +evolution.generations=1000 \
+    project_name="dynamic_evolution_v1" \
+    run_name="ea_pop_100"

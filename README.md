@@ -20,10 +20,47 @@ See more info [here](https://docs.astral.sh/uv/) and [here](https://docs.astral.
 
 
 
-## Run EA on CPU cluster
+## Running Evolutionary Algorithm
+
+### 1. Configuration
+The experiment is configured in `abm/ea_evaluation.yaml`. Key parameters include:
+- `evolution.generations`: Number of generations.
+- `evolution.replicates`: Number of parallel replicates (managed internally).
+- `environment.mode`: "dynamic" (switches environments) or "static" (fixed environment).
+
+### 2. Local Execution (No Slurm)
+You can run the full evolutionary algorithm locally. This is suitable if you have a powerful workstation (e.g., many CPU cores or a GPU) and want to avoid the queue.
+
+**Full Experiment (Uses defaults from `abm/ea_evaluation.yaml`):**
+```bash
+# Run with default settings (dynamic mode)
+PYTHONPATH=. uv run abm/info_channels_ea.py
+```
+
+**Testing / Debugging (Short run):**
+```bash
+# Run with overrides for a quick check
+PYTHONPATH=. uv run abm/info_channels_ea.py \
+    evolution.replicates=2 \
+    evolution.generations=10 \
+    max_steps=100 \
+    project_name="local_test"
+```
+
+**Full Static Experiment:**
+```bash
+# Runs 1000 generations, 100 replicates, static mode (e.g., baseline)
+PYTHONPATH=. uv run abm/info_channels_ea.py environment.mode="static" environment.static_category="baseline"
+```
+
+### 3. HPC Execution (Slurm)
+To run the full suite of experiments (Dynamic + All Static Baselines) on a Slurm cluster:
 ```bash
 sbatch ea_cpu_driver_itb.sh
 ```
+This script submits:
+- One job for the **Dynamic** pipeline.
+- Separate jobs for each **Static** environment category (`baseline`, `high_cost`, `noisy_private`, `fast_target`).
 
 ## Run 3 channels parameter sweep
 ```bash

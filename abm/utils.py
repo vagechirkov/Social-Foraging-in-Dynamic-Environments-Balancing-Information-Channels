@@ -66,15 +66,22 @@ class VmasEvaluator:
 
         # Calculate batch sizes based on total population
         if self.num_workers > 1 and self.device == "cpu":
-            self.sub_batch_size = n_envs // self.num_workers
+            if n_envs < self.num_workers:
+                self.num_workers = n_envs
+                self.sub_batch_size = 1
+                print(f"reduced workers to {self.num_workers} as n_envs < cpu_count")
+            else:
+                # Use ceiling division to ensure we can cover all n_envs
+                self.sub_batch_size = (n_envs + self.num_workers - 1) // self.num_workers
+            
             self.total_pop = self.sub_batch_size * self.num_workers
         else:
             self.sub_batch_size = n_envs
             self.total_pop = n_envs
 
         if self.total_pop != n_envs:
-            print(f"Warning: Total population adjusted from {n_envs} to "
-                  f"{self.total_pop} to match worker count.")
+            print(f"Note: Evaluator capacity adjusted from {n_envs} to "
+                  f"{self.total_pop} to fit parallel batching (padding will be used).")
 
         print(f"Initializing Env on {self.device} | Workers: {self.num_workers} | Total Pop: {self.total_pop}")
 
@@ -113,8 +120,16 @@ class VmasEvaluator:
         flat_population = [ind for island in islands for ind in island]
         population_genes = torch.tensor(flat_population, dtype=torch.float32, device=self.device)
 
-        total_pop = len(islands)
-
+        n_requested_islands = len(islands)
+        
+        # Check if padding is needed
+        if n_requested_islands < self.total_pop:
+            # Pad with zeros to match total_pop.
+            # These padded agents will run but their results will be discarded.
+            n_pad = self.total_pop - n_requested_islands
+            pad_genes = torch.zeros(n_pad * self.cfg.n_agents, N_CHANNELS, device=self.device)
+            population_genes = torch.cat([population_genes, pad_genes], dim=0)
+        
         # Reshape Genes & Match Environment Batch Size
         # (This logic ensures [Workers, SubBatch] structure is correct)
         if isinstance(env.base_env, ParallelEnv): # Check base_env because of TransformedEnv wrapper
@@ -127,11 +142,11 @@ class VmasEvaluator:
             batch_size_shape = [self.num_workers, self.sub_batch_size]
         else:
             reshaped_genes = population_genes.view(
-                total_pop,
+                self.total_pop,
                 self.cfg.n_agents,
                 N_CHANNELS
             )
-            batch_size_shape = [total_pop]
+            batch_size_shape = [self.total_pop]
 
         # Create Initial TensorDict
         initial_tensordict = TensorDict(
@@ -158,16 +173,29 @@ class VmasEvaluator:
             )
 
         # Compute Rewards
+        # rollouts["next", "agents", "reward"] has shape [Batch..., Steps, Agents, 1]
         rewards_all = rollouts["next", "agents", "reward"]
 
-        time_dim_idx = -3 # Assuming [..., Time, Agents, 1]
-        total_rewards = rewards_all.sum(dim=time_dim_idx).squeeze(-1)
+        # Sum rewards over the time dimension (Steps)
+        # The time dimension is typically the one after the batch dimensions.
+        # If batch_size_shape is [W, SB], then rewards_all is [W, SB, Steps, Agents, 1]
+        # If batch_size_shape is [TP], then rewards_all is [TP, Steps, Agents, 1]
+        time_dim_idx = len(batch_size_shape)
+        total_rewards = rewards_all.sum(dim=time_dim_idx) # Shape: [Batch..., Agents, 1]
 
-        # Flatten batch dimensions ([6, 10] -> [60])
-        if len(total_rewards.shape) > 2:
-            total_rewards = total_rewards.flatten(0, 1)
+        # Flatten batch dimensions and remove the last '1' dimension
+        # Resulting shape should be [TotalPop, Agents]
+        if isinstance(env.base_env, ParallelEnv):
+            total_rewards = total_rewards.view(self.total_pop, self.cfg.n_agents)
+        else:
+            total_rewards = total_rewards.view(self.total_pop, self.cfg.n_agents)
+        
+        # Remove Padding if applied
+        if n_requested_islands < self.total_pop:
+            total_rewards = total_rewards[:n_requested_islands]
 
         # Assign Fitness
+        # Flatten total_rewards to match flat_population for assignment
         flat_rewards = total_rewards.cpu().numpy().flatten()
         for ind, reward in zip(flat_population, flat_rewards):
             ind.fitness.values = (float(reward),)
@@ -201,73 +229,96 @@ class ExperimentLogger:
             config=config_dict
         )
 
-    def log_metrics_ga(self, gen: int, fitness_tensor: torch.Tensor, steps_per_sec: float, islands: List[List[Any]]):
+    def log_metrics_ga(self, gen: int, fitness_tensor: torch.Tensor, steps_per_sec: float, islands: List[List[Any]], log_table: bool = False):
         # 1. Global Statistics (All Agents)
         global_mean = fitness_tensor.mean().item()
         global_median = fitness_tensor.median().item()
         global_max = fitness_tensor.max().item()
 
         # 2. Per-Environment Statistics
-        # fitness_tensor shape: [POP_SIZE, N_AGENTS]
         env_means = fitness_tensor.mean(dim=1)
-        env_medians = fitness_tensor.median(dim=1).values
-
-        # 3. Top-K Environments Statistics
+        
+        # 3. Top-K Environments
         top_k = self.cfg.top_k
         top_k_indices = torch.argsort(env_means, descending=True)[:top_k]
 
-        # Get all agent rewards for the top k islands to compute aggregated stats
+        # Get all agent rewards for the top k islands
         top_k_agents_fitness = fitness_tensor[top_k_indices]
-        top_k_mean = top_k_agents_fitness.mean().item()
-        top_k_median = top_k_agents_fitness.median().item()
-
-        # 4. Channel Probabilities (Global vs Top-K)
-        # Flatten all genes to calculate global probabilities
-        all_genes = [ind for island in islands for ind in island]
-        all_logits = torch.tensor(all_genes, dtype=torch.float32, device='cpu')
-        # Softmax over channel dimension to get probabilities
-        all_probs = torch.softmax(all_logits, dim=-1)
-        global_probs_mean = all_probs.mean(dim=0)
-
-        # Get Top-K genes
-        top_k_indices_list = top_k_indices.cpu().numpy()
-        top_k_genes = [ind for i in top_k_indices_list for ind in islands[i]]
-        top_k_logits = torch.tensor(top_k_genes, dtype=torch.float32, device='cpu')
-        top_k_probs = torch.softmax(top_k_logits, dim=-1)
-        top_k_probs_mean = top_k_probs.mean(dim=0)
-
+        
         print(f"Gen {gen:4d} | Global Mean: {global_mean:8.4f} | "
               f"Global Max: {global_max:8.4f} | "
-              f"Top {top_k} Mean: {top_k_mean:8.4f} | "
               f"Speed: {steps_per_sec:.0f} env-steps/s")
 
         if self.use_wandb:
             metrics = {
                 "gen": gen,
-
-                # Global
+                
+                # Scalars
                 "global_mean": global_mean,
-                "global_median": global_median,
                 "global_max": global_max,
-
-                # Top K
-                f"top_{top_k}_mean": top_k_mean,
-                f"top_{top_k}_median": top_k_median,
-
-                # Independent Env Distributions
-                "env_means_hist": wandb.Histogram(env_means.cpu().numpy()),
-                "env_medians_hist": wandb.Histogram(env_medians.cpu().numpy()),
-
-                # evaluation speed
-                "steps_per_sec": steps_per_sec
+                "steps_per_sec": steps_per_sec,
+                
+                # Fitness Histograms
+                "hist/fitness_global": wandb.Histogram(fitness_tensor.cpu().numpy().flatten()),
+                "hist/fitness_top_k": wandb.Histogram(top_k_agents_fitness.cpu().numpy().flatten()),
+                
+                # Env Mean Histogram
+                "hist/env_means": wandb.Histogram(env_means.cpu().numpy()),
             }
 
-            # Log Channel Probabilities
-            for i, name in enumerate(CHANNEL_NAMES):
-                metrics[f"prob_global/{name}"] = global_probs_mean[i].item()
-                metrics[f"prob_top_{top_k}/{name}"] = top_k_probs_mean[i].item()
+            # 4. Channel Probabilities (Histograms)
+            # Calculate probabilities for ALL agents
+            all_genes = [ind for island in islands for ind in island]
+            all_logits = torch.tensor(all_genes, dtype=torch.float32, device='cpu')
+            all_probs = torch.softmax(all_logits, dim=-1) # [TotalAgents, N_CHANNELS]
+            
+            # Calculate probabilities for Top-K agents
+            top_k_indices_list = top_k_indices.cpu().numpy()
+            top_k_genes = [ind for i in top_k_indices_list for ind in islands[i]]
+            top_k_logits = torch.tensor(top_k_genes, dtype=torch.float32, device='cpu')
+            top_k_probs = torch.softmax(top_k_logits, dim=-1) # [TopK*Agents, N_CHANNELS]
 
-            wandb.log(metrics)
+            # Log distributions for active channels only
+            active_indices = [i for i in range(N_CHANNELS) if i not in self.frozen_indices]
+            
+            for i in active_indices:
+                name = CHANNEL_NAMES[i]
+                # Global Histogram for this channel
+                metrics[f"hist/prob_global_{name}"] = wandb.Histogram(all_probs[:, i].numpy())
+                # Top-K Histogram for this channel
+                metrics[f"hist/prob_top_k_{name}"] = wandb.Histogram(top_k_probs[:, i].numpy())
+   
+            # 5. Best Individual Scalars
+            best_ind_idx = torch.argmax(fitness_tensor.view(-1))
+            best_probs = all_probs[best_ind_idx]
+            metrics["best/fitness"] = global_max
+            for i in active_indices:
+               metrics[f"best/prob_{CHANNEL_NAMES[i]}"] = best_probs[i].item()
+
+            # 6. Average Probabilities (Scalars)
+            avg_probs = all_probs.mean(dim=0)
+            for i in active_indices:
+                metrics[f"avg/prob_{CHANNEL_NAMES[i]}"] = avg_probs[i].item()
+
+            # 7. Periodic Table Logging (Snapshot)
+            if log_table:
+                columns = ["gen", "fitness"] + [f"prob_{CHANNEL_NAMES[i]}" for i in active_indices] 
+                tbl = wandb.Table(columns=columns)
+                
+                # Log a sample of Top-K agents (e.g., up to 100 to avoid huge tables)
+                # Randomly sample or take top N
+                n_sample = min(len(top_k_probs), 100)
+                # Sort top_k_probs by fitness if we had individual fitness readily aligned...
+                # For now just take the first n_sample of the Top-K block
+                for i in range(n_sample):
+                    row = [gen, top_k_agents_fitness.view(-1)[i].item()]
+                    for ch_idx in active_indices:
+                        row.append(top_k_probs[i, ch_idx].item())
+                    tbl.add_data(*row)
+                
+                metrics["population_snapshot"] = tbl
+
+            wandb.log(metrics, step=gen)
 
     def log_heatmap(self, islands, fitness_tensor, gen):
         """Generates and logs the strategy heatmap."""
@@ -301,7 +352,7 @@ class ExperimentLogger:
         top_islands = [islands[i] for i in top_k_indices]
         top_k_agents = [ind for island in top_islands for ind in island]
 
-        fig_top = self._generate_ternary_density_fig(top_k_agents, top_k, active_indices,
+        fig_top = self._generate_ternary_density_fig(top_k_agents, len(top_islands), active_indices,
                                                      f"Top {len(top_islands)} Groups Strategy Density")
 
         if self.use_wandb:
@@ -355,11 +406,15 @@ class ExperimentLogger:
         # Extract logits -> probs
         all_genes = [ind for island in top_islands for ind in island]
         logits_tensor = torch.tensor(all_genes, dtype=torch.float32, device='cpu')
-        logits_tensor = logits_tensor.view(top_k, self.cfg.n_agents, N_CHANNELS)
+        
+        # Use actual length of top_islands, which might be less than cfg.top_k if replicates < top_k
+        actual_k = len(top_islands)
+        logits_tensor = logits_tensor.view(actual_k, self.cfg.n_agents, N_CHANNELS)
         probs_tensor = torch.softmax(logits_tensor, dim=2)
 
         # 2. Sort Agents
-        sort_order_indices = [3, 2, 1, 4, 0] # Reverse priority: Pos, Heading, Belief, None, Priv
+        # Sort order: Pos(3), Heading(2), Belief(1), None(4), Priv(0), Consensus(5)
+        sort_order_indices = [3, 2, 1, 4, 0, 5] 
 
         # Filter out frozen indices from sorting logic to avoid noise
         active_sort_indices = [idx for idx in sort_order_indices if idx not in self.frozen_indices]
@@ -404,19 +459,20 @@ class ExperimentLogger:
         # Set Y-axis labels to be the fitness scores
         n_agents = self.cfg.n_agents
         # Calculate centers for each island block
-        y_ticks = np.arange(top_k) * n_agents + (n_agents / 2) - 0.5
+        actual_k = len(sorted_means)
+        y_ticks = np.arange(actual_k) * n_agents + (n_agents / 2) - 0.5
         y_labels = [f"{mean:.2f}" for mean in sorted_means.cpu().numpy()]
 
         ax.set_yticks(y_ticks)
         ax.set_yticklabels(y_labels)
         ax.set_ylabel("Avg Group Reward")
 
-        ax.set_title(f"Top {top_k} Groups")
+        ax.set_title(f"Top {actual_k} Groups")
 
         # Overlay lines
         for i in range(heatmap_data.shape[0]):
             ax.axhline(y=i - 0.5, color='black', linewidth=0.2, alpha=0.1)
-        for i in range(1, top_k):
+        for i in range(1, actual_k):
             ax.axhline(y=i * self.cfg.n_agents - 0.5, color='white', linewidth=1.5, alpha=0.8)
 
         plt.tight_layout()
