@@ -21,12 +21,16 @@ class GeneticAlgorithm:
     """Handles all Evolutionary Computation logic (DEAP)."""
 
     def __init__(self, n_channels: int, frozen_indices: List[int] = None, 
-                 cxpb: float = 0.5, mutpb: float = 0.2, sigma: float = 0.1):
+                 cxpb: float = 0.5, mutpb: float = 0.2, sigma: float = 0.1,
+                 indpb: float = 0.2, tournament_size: int = 3, elitism_count: int = 1):
         self.n_channels = n_channels
         self.frozen_indices = set(frozen_indices) if frozen_indices else set()
         self.cxpb = cxpb
         self.mutpb = mutpb
         self.sigma = sigma
+        self.indpb = indpb
+        self.tournament_size = tournament_size
+        self.elitism_count = elitism_count
         self.toolbox = base.Toolbox()
         self._setup_toolbox()
 
@@ -54,8 +58,8 @@ class GeneticAlgorithm:
         
         # Standard Operators
         self.toolbox.register("mate", tools.cxTwoPoint)
-        self.toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=self.sigma, indpb=0.2)
-        self.toolbox.register("select", tools.selTournament, tournsize=3)
+        self.toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=self.sigma, indpb=self.indpb)
+        self.toolbox.register("select", tools.selTournament, tournsize=self.tournament_size)
 
     def create_population(self, pop_size: int, n_agents: int) -> List[List[Any]]:
         """Creates a list of islands (populations)."""
@@ -71,8 +75,8 @@ class GeneticAlgorithm:
             
             # 2. Identify the Elite (Best parent) BEFORE modification
             # We must clone it to ensure it isn't mutated later
-            best_ind = tools.selBest(island, 1)[0]
-            elite = self.toolbox.clone(best_ind)
+            best_inds = tools.selBest(island, self.elitism_count)
+            elites = [self.toolbox.clone(ind) for ind in best_inds]
 
             # 3. Apply Crossover and Mutation to offspring
             for child1, child2 in zip(offspring[::2], offspring[1::2]):
@@ -93,7 +97,8 @@ class GeneticAlgorithm:
             # 5. Re-inject Elitism
             # Replace the first offspring with the preserved elite parent
             # This ensures the max fitness of the population never decreases
-            offspring[0] = elite
+            for i in range(len(elites)):
+                offspring[i] = elites[i]
             
             next_gen_islands.append(offspring)
 
@@ -182,8 +187,12 @@ def run_experiment(cfg: DictConfig):
     ga = GeneticAlgorithm(
         n_channels=6,
         frozen_indices=frozen_indices,
-        cxpb=0,  # disable crossover
-        mutpb=1.0  # always mutate
+        cxpb=cfg.evolution.crossover_prob,
+        mutpb=cfg.evolution.mutation_prob,
+        sigma=cfg.evolution.sigma,
+        indpb=cfg.evolution.indpb,
+        tournament_size=cfg.evolution.tournament_size,
+        elitism_count=cfg.evolution.elitism_count
     )
     
     if work_cfg.use_wandb:
@@ -191,7 +200,13 @@ def run_experiment(cfg: DictConfig):
             "total_agents": total_agents, 
             "replicates": replicates,
             "mode": cfg.environment.mode,
-            "generations": generations
+            "generations": generations,
+            "elitism": cfg.evolution.elitism_count,
+            "tournament_size": cfg.evolution.tournament_size,
+            "mutation_prob": cfg.evolution.mutation_prob,
+            "crossover_prob": cfg.evolution.crossover_prob,
+            "sigma": cfg.evolution.sigma,
+            "indpb": cfg.evolution.indpb
         })
 
     # Initialize Population
