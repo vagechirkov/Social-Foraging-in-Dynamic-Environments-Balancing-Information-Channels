@@ -67,6 +67,11 @@ This script submits:
 uv run python submit_jobs_3_channel.py
 ```
 
+## Run 3 channels parameter sweep for each environment category
+```bash
+bash 3_channel_categories_driver.sh
+```
+
 ## RUN EA on GPU cluster
 ```bash
 bash ea_gpu_driver_scioi.sh 
