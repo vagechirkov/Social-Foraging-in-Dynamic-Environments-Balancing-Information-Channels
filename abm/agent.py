@@ -1110,6 +1110,12 @@ def compute_reward(agent: ForagingAgent, targets):
     agent.target_distance_reward = (1.0 / (1.0 + nearest_target_dist ** 2.0))
     agent.target_reward = agent.target_distance_reward * nearest_target_quality  # Scale by quality
 
+    # Define a maximum relevant distance (e.g., world size diagonal)
+    # Linear Reward: Pays out immediately for any movement towards target
+    # MAX_DIST = ((world.x_semidim * 2) ** 2 + (world.y_semidim * 2) ** 2) ** 0.5
+    # agent.target_distance_reward = (MAX_DIST - nearest_target_dist) / MAX_DIST
+    # agent.target_distance_reward = torch.clamp(agent.target_distance_reward, min=0.0)
+
     # Calculate Information Channel Costs
     if agent.action.u is not None:
         # channel id: (batch,)
