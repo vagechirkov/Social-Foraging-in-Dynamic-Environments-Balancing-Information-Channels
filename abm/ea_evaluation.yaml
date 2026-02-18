@@ -12,9 +12,9 @@ evolution:
   generations: 1000
   replicates: 60
   switch_interval: 250
-  elitism_count: 3
-  tournament_size: 2
-  mutation_prob: 1.0  # mutpb
+  elitism_count: 5
+  tournament_size: 4
+  mutation_prob: 0.2  # mutpb
   crossover_prob: 0.0 # cxpb
   sigma: 0.1
   indpb: 0.2
@@ -22,7 +22,7 @@ evolution:
 # Environment Configuration
 environment:
   mode: "dynamic" # Options: "dynamic", "static"
-  static_category: "baseline" # Only used if mode is "static"
+  static_category: "solitary" # Only used if mode is "static"
 
 environments:
   categories:
@@ -30,7 +30,7 @@ environments:
       target_speed: 0.7
       cost_priv: 0.005
       cost_belief: 0.05
-      spot_radius: 0.25
+      spot_radius: 1.0
       dist_noise_scale_priv: 0.05
     
     collective:
@@ -38,10 +38,10 @@ environments:
       cost_priv: 0.05
       cost_belief: 0.005
       spot_radius: 0.25
-      dist_noise_scale_priv: 0.5
+      dist_noise_scale_priv: 0.05
     
     info_constrained:
-      target_speed: 0.1
+      target_speed: 0.3
       cost_priv: 0.08
       cost_belief: 0.08
       spot_radius: 1.0
