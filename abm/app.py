@@ -12,18 +12,7 @@ from tensordict import TensorDict
 # Add the project root to sys.path to allow importing the 'abm' package
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Color map for agents based on state
-STATE_COLOR_MAP = {
-    0: (0, 0.619, 0.451),  # private #009E73
-    1: (0.337, 0.706, 0.914),  # social #56B4E9
-    2: (0.337, 0.706, 0.914),  # social #56B4E9
-    3: (0.337, 0.706, 0.914),  # social #56B4E9
-    4: (0.902, 0.624, 0),  # none #E69F00
-    5: (0.337, 0.706, 0.914), # social #56B4E9
-}
-
-st.set_page_config(page_title="ABM Simulation", layout="wide")
-# st.title("Social Foraging ABM - Fast Heatmap")
+from abm.utils import render_env_frame, STATE_COLOR_MAP
 
 # Lazy Import
 try:
@@ -33,6 +22,9 @@ try:
 except ImportError as e:
     st.error(f"Failed to import VMAS/Scenario/Agents: {e}")
     st.stop()
+
+st.set_page_config(page_title="ABM Simulation", layout="wide")
+# st.title("Social Foraging ABM - Fast Heatmap")
 
 # --- Simulation Settings ---
 # st.sidebar.header("Simulation Settings")
@@ -115,74 +107,9 @@ if col2.button("Initialize / Reset"): reset_simulation()
 run_simulation = col2.toggle("Run Simulation", value=False)
 placeholder = col1.empty()
 
-def get_gaussian_density(mean, cov, x_range, y_range, res=50):
-    x = np.linspace(x_range[0], x_range[1], res)
-    y = np.linspace(y_range[0], y_range[1], res)
-    X, Y = np.meshgrid(x, y)
-    pos = np.dstack((X, Y))
-    try:
-        inv_cov = np.linalg.inv(cov)
-        det_cov = np.linalg.det(cov)
-        norm_factor = 1.0 / (2 * np.pi * np.sqrt(max(det_cov, 1e-12)))
-        diff = pos - mean
-        exponent = -0.5 * np.sum((diff @ inv_cov) * diff, axis=-1)
-        return norm_factor * np.exp(exponent)
-    except:
-        return np.zeros((res, res))
-
 def render_heatmap(env, fig, ax):
-    raw_env = env._env
-    scenario = raw_env.scenario
-    ax.clear()
-    ax.set_xlim(-scenario.x_dim, scenario.x_dim)
-    ax.set_ylim(-scenario.y_dim, scenario.y_dim)
-    ax.set_aspect('equal')
-    ax.set_xticks([]); ax.set_yticks([])
-
-    # 1. Background Heatmap - Agent 0 Beliefs
-    agent_0 = next((a for a in raw_env.agents if a.name == "agent_0"), None)
-    if agent_0 and hasattr(agent_0, 'belief_target_pos'):
-        res = 60
-        total_density = np.zeros((res, res))
-        means = agent_0.belief_target_pos[0].detach().cpu().numpy()
-        covs = agent_0.belief_target_covariance[0].detach().cpu().numpy()
-        for k in range(len(means)):
-            if not np.allclose(covs[k], 0):
-                density = get_gaussian_density(means[k], covs[k], 
-                                               [-scenario.x_dim, scenario.x_dim], 
-                                               [-scenario.y_dim, scenario.y_dim], res=res)
-                total_density += density
-        if np.max(total_density) > 0:
-            ax.imshow(total_density, extent=[-scenario.x_dim, scenario.x_dim, -scenario.y_dim, scenario.y_dim],
-                      origin='lower', alpha=0.4, cmap='Blues', interpolation='bilinear', zorder=1)
-
-    # 3. Plot Agents
-    agents_x, agents_y, colors, sizes = [], [], [], []
-    for agent in raw_env.world.agents:
-        if "agent" in agent.name and isinstance(agent, ForagingAgent):
-            pos = agent.state.pos[0].detach().cpu().numpy()
-            agents_x.append(pos[0])
-            agents_y.append(pos[1])
-            sizes.append(150 if agent.name == "agent_0" else 50)
-            color = (0, 0, 1) # Default blue
-            if hasattr(agent, 'action') and agent.action.u is not None:
-                # Use environment index 0 for current categorical state
-                idx = int(agent.action.u[0, 0].item())
-                color = STATE_COLOR_MAP.get(idx, (0, 0, 1))
-            colors.append(color)
-            
-    if agents_x:
-        ax.scatter(agents_x, agents_y, c=colors, s=sizes, edgecolors='black', alpha=0.9, zorder=15)
-
-    # 2. Plot Targets
-    for agent in raw_env.world.agents:
-        if "target" in agent.name or isinstance(agent, TargetAgent):
-            pos = agent.state.pos[0].detach().cpu().numpy()
-            quality = getattr(agent, 'quality', 1.0)
-            if torch.is_tensor(quality):
-                quality = quality[0].item()
-            ax.scatter(pos[0], pos[1], color='red', marker='*', s=200 * quality, edgecolors='black', zorder=10)
-
+    render_env_frame(env, ax)
+    
     buf = io.BytesIO()
     fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.05, dpi=80)
     buf.seek(0)

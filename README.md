@@ -110,3 +110,11 @@ uv run optuna-dashboard sqlite:///env_optimization_v1.db
 ```bash
 sbatch optimize_environment_hpc.sh
 ```
+
+
+## Generate videos
+```bash
+uv run python abm/generate_videos.py --seed 42 --category solitary --p_private 0.8 --p_social 0.0 --p_none 0.2 --max_steps 1000
+uv run python abm/generate_videos.py --seed 42 --category collective --p_private 0.4 --p_social 0.6 --p_none 0.0 --max_steps 1000
+uv run python abm/generate_videos.py --seed 42 --category info_constrained --p_private 0.1 --p_social 0.1 --p_none 0.8 --max_steps 1000
+```
