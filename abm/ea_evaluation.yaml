@@ -10,15 +10,15 @@ plot_freq: 10
 # Evolution Settings
 evolution:
   generations: 2000
-  replicates: 60
+  replicates: 30
   switch_interval: 250
   elitism_count: 5
   tournament_size: 4
-  mutation_prob: 0.2  # mutpb
+  mutation_prob: 0.6  # mutpb
   crossover_prob: 0.0 # cxpb
   sigma: 0.1
   indpb: 0.2
-  selection: "individual-local"
+  selection: "individual-global" # "individual-local"
   
 # Environment Configuration
 environment:
