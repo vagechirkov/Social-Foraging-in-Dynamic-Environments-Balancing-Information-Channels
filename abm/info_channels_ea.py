@@ -22,7 +22,8 @@ class GeneticAlgorithm:
 
     def __init__(self, n_channels: int, frozen_indices: List[int] = None, 
                  cxpb: float = 0.5, mutpb: float = 0.2, sigma: float = 0.1,
-                 indpb: float = 0.2, tournament_size: int = 3, elitism_count: int = 1):
+                 indpb: float = 0.2, tournament_size: int = 3, elitism_count: int = 1,
+                 selection: str = "individual-local"):
         self.n_channels = n_channels
         self.frozen_indices = set(frozen_indices) if frozen_indices else set()
         self.cxpb = cxpb
@@ -31,6 +32,7 @@ class GeneticAlgorithm:
         self.indpb = indpb
         self.tournament_size = tournament_size
         self.elitism_count = elitism_count
+        self.selection = selection
         self.toolbox = base.Toolbox()
         self._setup_toolbox()
 
@@ -66,7 +68,16 @@ class GeneticAlgorithm:
         return [self.toolbox.population(n=n_agents) for _ in range(pop_size)]
 
     def evolve_population(self, islands: List[List[Any]], generation: int) -> List[List[Any]]:
-        """Applies Standard GA Pipeline with Elitism to all islands."""
+        """Evolves population either locally tracking islands or globally acting on pooled islands."""
+        if self.selection == "individual-global":
+            return self._evolve_global(islands, generation)
+        elif self.selection == "individual-local":
+            return self._evolve_local(islands, generation)
+        else:
+            raise ValueError(f"Unknown selection method: {self.selection}")
+
+    def _evolve_local(self, islands: List[List[Any]], generation: int) -> List[List[Any]]:
+        """Applies Standard GA Pipeline with Elitism to all islands independently."""
         next_gen_islands = []
         for island in islands:
             # 1. Select offspring (Tournament)
@@ -102,6 +113,64 @@ class GeneticAlgorithm:
             
             next_gen_islands.append(offspring)
 
+        return next_gen_islands
+
+    def _evolve_global(self, islands: List[List[Any]], generation: int) -> List[List[Any]]:
+        """Applies GA Pipeline globally by pooling all islands, then redistributing."""
+        num_islands = len(islands)
+        if num_islands == 0:
+            return []
+        
+        # We assume all islands have the same capacity
+        island_size = len(islands[0])
+        total_size = num_islands * island_size
+        
+        # Pool all individuals
+        global_pop = []
+        for island in islands:
+            global_pop.extend(island)
+            
+        # 1. Select offspring (Tournament) globally
+        offspring = self.toolbox.select(global_pop, total_size)
+        offspring = list(map(self.toolbox.clone, offspring))
+        
+        # 2. Identify the Elites globally BEFORE modification
+        total_elitism = self.elitism_count * num_islands
+        best_inds = tools.selBest(global_pop, total_elitism)
+        elites = [self.toolbox.clone(ind) for ind in best_inds]
+        
+        # 3. Apply Crossover and Mutation to offspring
+        for child1, child2 in zip(offspring[::2], offspring[1::2]):
+            if random.random() < self.cxpb:
+                self.toolbox.mate(child1, child2)
+                del child1.fitness.values
+                del child2.fitness.values
+
+        for mutant in offspring:
+            if random.random() < self.mutpb:
+                self.toolbox.mutate(mutant)
+                del mutant.fitness.values
+                
+        # 4. Apply Constraints (Frozen Indices)
+        for ind in offspring:
+             self._apply_frozen_constraints(ind)
+             
+        # 5. Re-inject Elitism
+        # Replace the first `total_elitism` offspring with the preserved elite parents
+        for i in range(len(elites)):
+            if i < len(offspring):
+                offspring[i] = elites[i]
+                
+        # Shuffle offspring so elites and families are randomly distributed across islands
+        random.shuffle(offspring)
+        
+        # 6. Redistribute offspring back to islands
+        next_gen_islands = []
+        for i in range(num_islands):
+            start_idx = i * island_size
+            end_idx = start_idx + island_size
+            next_gen_islands.append(offspring[start_idx:end_idx])
+            
         return next_gen_islands
 
 
@@ -192,7 +261,8 @@ def run_experiment(cfg: DictConfig):
         sigma=cfg.evolution.sigma,
         indpb=cfg.evolution.indpb,
         tournament_size=cfg.evolution.tournament_size,
-        elitism_count=cfg.evolution.elitism_count
+        elitism_count=cfg.evolution.elitism_count,
+        selection=cfg.evolution.get("selection", "individual-local")
     )
     
     if work_cfg.use_wandb:
@@ -206,7 +276,8 @@ def run_experiment(cfg: DictConfig):
             "mutation_prob": cfg.evolution.mutation_prob,
             "crossover_prob": cfg.evolution.crossover_prob,
             "sigma": cfg.evolution.sigma,
-            "indpb": cfg.evolution.indpb
+            "indpb": cfg.evolution.indpb,
+            "selection": cfg.evolution.get("selection", "individual-local")
         })
 
     # Initialize Population
