@@ -56,14 +56,22 @@ PYTHONPATH=. uv run abm/info_channels_ea.py environment.mode="static" environmen
 ### 3. HPC Execution (Slurm)
 To run the full suite of experiments (Dynamic + All Static Baselines) on a Slurm cluster:
 
+**CPU Execution (Default)**
 ```bash
 uv run python submit_ea.py --dry-run
 uv run python submit_ea.py
 ```
 
+**GPU Execution**
+To dispatch the evolutionary algorithm to the GPU nodes (e.g. `ex_scioi_gpu`), append the `--gpu` flag:
+```bash
+uv run python submit_ea.py --gpu --dry-run
+uv run python submit_ea.py --gpu
+```
+
 This script submits:
-- One job for the **Dynamic** pipeline.
-- Separate jobs for each **Static** environment category (`baseline`, `noisy_private`, `fast_target`).
+- One job for the **Dynamic** pipeline for each pair of environments.
+- Separate jobs for each **Static** environment category (`solitary`, `collective`, `info_constrained`).
 
 ## Run 3 channels parameter sweep
 ```bash
@@ -73,11 +81,6 @@ uv run python submit_jobs_3_channel.py
 ## Run 3 channels parameter sweep for each environment category
 ```bash
 uv run python submit_categories.py
-```
-
-## RUN EA on GPU cluster
-```bash
-bash ea_gpu_driver_scioi.sh 
 ```
 
 ## Testing
@@ -117,4 +120,11 @@ sbatch optimize_environment_hpc.sh
 uv run python abm/generate_videos.py --seed 42 --category solitary --p_private 0.8 --p_social 0.0 --p_none 0.2 --max_steps 1000
 uv run python abm/generate_videos.py --seed 42 --category collective --p_private 0.4 --p_social 0.6 --p_none 0.0 --max_steps 1000
 uv run python abm/generate_videos.py --seed 42 --category info_constrained --p_private 0.1 --p_social 0.1 --p_none 0.8 --max_steps 1000
+```
+
+
+## Clean up repo
+
+```bash
+rm job_*
 ```

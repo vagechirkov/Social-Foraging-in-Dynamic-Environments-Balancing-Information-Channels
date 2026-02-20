@@ -24,19 +24,16 @@ source .venv/bin/activate
 # echo "uv sync --extra cu121..."
 # uv sync --extra cu121 --verbose
 
-t_speed=$1
-dim=$2
+mode=$1
+category=$2
 
-# uv run
-python abm/info_channels_ea.py \
-    --m n_agents=30 \
-    target_speed="$t_speed" \
-    x_dim="$dim" \
-    y_dim="$dim" \
-    max_steps=1000 \
-    n_envs=100 \
-    ngen=2000 \
-    top_k=10 \
-    migration_freq=10 \
-    n_migrants=3 \
-    cost_priv=0.5
+echo "Running Evolutionary Pipeline on GPU:"
+echo "Mode: $mode"
+echo "Category: $category"
+
+uv run abm/info_channels_ea.py \
+    environment.mode="$mode" \
+    environment.static_category="$category" \
+    project_name="dynamic_evolution_v1" \
+    use_gpu=True \
+    run_name="ea_pop_30_gpu"

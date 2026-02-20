@@ -253,26 +253,27 @@ class VmasEvaluator:
         policy = TensorDictModule(policy_func, in_keys=["genes"], out_keys=[env.action_key])
 
         # Rollout
+        # Compute Rewards Incrementally
         with torch.no_grad():
-            env.reset(initial_tensordict)
-            rollouts = env.rollout(
-                max_steps=self.cfg.max_steps,
-                policy=policy,
-                tensordict=initial_tensordict,
-                auto_reset=True
-            )
+            tensordict = env.reset(initial_tensordict)
+            # Create a tensor to accumulate rewards. We expect rewards to be shaped matching env batches.
+            # Shape for parallel envs is [Workers, SubBatch, Agents, 1], otherwise [TotalPop, Agents, 1]
+            total_rewards = torch.zeros(batch_size_shape + [self.cfg.n_agents, 1], device=self.device)
 
-        # Compute Rewards
-        # rollouts["next", "agents", "reward"] has shape [Batch..., Steps, Agents, 1]
-        rewards_all = rollouts["next", "agents", "reward"]
-
-        # Sum rewards over the time dimension (Steps)
-        # The time dimension is typically the one after the batch dimensions.
-        # If batch_size_shape is [W, SB], then rewards_all is [W, SB, Steps, Agents, 1]
-        # If batch_size_shape is [TP], then rewards_all is [TP, Steps, Agents, 1]
-        time_dim_idx = len(batch_size_shape)
-        total_rewards = rewards_all.sum(dim=time_dim_idx) # Shape: [Batch..., Agents, 1]
-
+            for _ in range(self.cfg.max_steps):
+                # 1. Action policy
+                tensordict = policy(tensordict)
+                # 2. Step Environment
+                tensordict = env.step(tensordict)
+                # 3. Accumulate step reward. TensorDict returns shape [Batch..., Agents, 1] under "next", "agents", "reward"
+                step_reward = tensordict["next", "agents", "reward"]
+                total_rewards += step_reward
+                # 4. Step forward the state
+                tensordict = tensordict["next"]
+                
+        # Time dimension scaling previously used `total_rewards = rewards_all.sum(dim=time_dim_idx)`
+        # `total_rewards` already has the shape `[Batch..., Agents, 1]` accumulated across the time span.
+        
         # Flatten batch dimensions and remove the last '1' dimension
         # Resulting shape should be [TotalPop, Agents]
         if isinstance(env.base_env, ParallelEnv):

@@ -7,6 +7,7 @@ import argparse
 def submit_ea_jobs():
     parser = argparse.ArgumentParser(description="Submit EA jobs (Dynamic pairs and Static baselines).")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without executing.")
+    parser.add_argument("--gpu", action="store_true", help="Submit to GPU partition instead of CPU.")
     args = parser.parse_args()
 
     # Load the configuration
@@ -18,9 +19,14 @@ def submit_ea_jobs():
     cfg = OmegaConf.load(config_path)
     
     categories = list(cfg.environments.categories.keys())
-    sbatch_script = "ea_cpu_hpc_itb.sh"
+    
+    if args.gpu:
+        sbatch_script = "ea_gpu_hpc_scioi.sh"
+    else:
+        sbatch_script = "ea_cpu_hpc_itb.sh"
     
     print(f"Found categories: {categories}")
+    print(f"Using submit script: {sbatch_script}")
 
     # 1. Dynamic Environment Pipeline (Pairwise)
     print("\n--- Submitting Dynamic Environment Pipeline (Pairwise) ---")
@@ -32,7 +38,7 @@ def submit_ea_jobs():
         pair_str = f"{pair[0]}-{pair[1]}"
         print(f"Processing pair: {pair_str}")
         
-        # Command arguments for ea_cpu_hpc_itb.sh:
+        # Command arguments for ea_cpu_hpc_itb.sh / ea_gpu_hpc_scioi.sh
         # $1: mode (dynamic)
         # $2: category (pair_str)
         
@@ -49,7 +55,7 @@ def submit_ea_jobs():
     for cat in categories:
         print(f"Processing static category: {cat}")
         
-        # Command arguments for ea_cpu_hpc_itb.sh:
+        # Command arguments for ea_cpu_hpc_itb.sh / ea_gpu_hpc_scioi.sh
         # $1: mode (static)
         # $2: category (cat)
         
