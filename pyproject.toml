@@ -24,14 +24,16 @@ dependencies = [
     "tqdm>=4.67.1",
     "deap>=1.4.3",
     "pandas>=2.3.3",
+]
+
+[project.optional-dependencies]
+additional = [
     "streamlit",
     "imageio",
     "pytest>=7.4.0",
     "optuna>=4.7.0",
     "optuna-dashboard>=0.20.0",
 ]
-
-[project.optional-dependencies]
 cpu = [
     "torch>=2.5.1",
 ]
