@@ -19,6 +19,7 @@ evolution:
   sigma: 0.1
   indpb: 0.2
   selection: "individual-global" # "individual-local"
+  multi_level_selection: false
   
 # Environment Configuration
 environment:
