@@ -164,6 +164,9 @@ class Scenario(BaseScenario):
             )
             world.add_agent(target)
 
+        self.target_agents = [a for a in world.agents if isinstance(a, TargetAgent)]
+        self.foraging_agents = [a for a in world.agents if isinstance(a, ForagingAgent)]
+
         return world
 
     def reset_world_at(self, env_index: int = None):
@@ -204,7 +207,7 @@ class Scenario(BaseScenario):
         return info
 
     def observation(self, agent: Agent):
-        if "target" in agent.name:
+        if isinstance(agent, TargetAgent):
             return torch.zeros(1, 2, device=agent.device)
         return torch.zeros(agent.batch_dim, 2, device=agent.device)
 
@@ -219,10 +222,9 @@ class Scenario(BaseScenario):
             probs[5] = 0.0 # Consensus
             agent.action.u = torch.distributions.Categorical(probs=probs).sample((agent.batch_dim, 1))
 
-        if "agent" in agent.name and isinstance(agent, ForagingAgent):
-            # get observation based on the selected information channel (agent.action.u[:, 0])
-            targets = [a for a in self.world.agents if "target" in a.name]
-            other_agents = [a for a in self.world.agents if a != agent and "target" not in a.name]
+        if isinstance(agent, ForagingAgent):
+            targets = self.target_agents
+            other_agents = [a for a in self.foraging_agents if a != agent]
 
             observe(agent, targets, other_agents)
             add_process_noise_to_belief(agent, self.target_speed)

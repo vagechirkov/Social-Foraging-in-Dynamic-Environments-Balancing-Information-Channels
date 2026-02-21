@@ -252,29 +252,28 @@ class VmasEvaluator:
 
         policy = TensorDictModule(policy_func, in_keys=["genes"], out_keys=[env.action_key])
 
-        # Optimize rollout step with torch.compile to reduce CPU dispatch overhead
-        # reduce-overhead mode uses CUDA graphs, so it should be safely disabled on CPU runs
-        # is_cpu = str(self.device) == "cpu"
-        # @torch.compile(backend="inductor", fullgraph=False, disable=is_cpu)
-        def compiled_step(td):
-            td = policy(td)
-            td = env.step(td)
-            return td["next"], td["next", "agents", "reward"]
-
         # Rollout
-        # Compute Rewards Incrementally
         with torch.inference_mode():
-            tensordict = env.reset(initial_tensordict)
-            # Create a tensor to accumulate rewards. We expect rewards to be shaped matching env batches.
-            # Shape for parallel envs is [Workers, SubBatch, Agents, 1], otherwise [TotalPop, Agents, 1]
-            total_rewards = torch.zeros(batch_size_shape + [self.cfg.n_agents, 1], device=self.device)
+            env.reset(initial_tensordict)
+            rollouts = env.rollout(
+                max_steps=self.cfg.max_steps,
+                policy=policy,
+                tensordict=initial_tensordict,
+                auto_reset=True,
+                auto_cast_to_device=True,
+            )
 
-            for _ in range(self.cfg.max_steps):
-                tensordict, step_reward = compiled_step(tensordict)
-                total_rewards += step_reward
-                
-        # Time dimension scaling previously used `total_rewards = rewards_all.sum(dim=time_dim_idx)`
-        # `total_rewards` already has the shape `[Batch..., Agents, 1]` accumulated across the time span.
+        # Compute Rewards
+        # rollouts["next", "agents", "reward"] has shape [Batch..., Steps, Agents, 1]
+        rewards_all = rollouts["next", "agents", "reward"]
+
+        # Sum rewards over the time dimension (Steps)
+        # The time dimension is typically the one after the batch dimensions.
+        # If batch_size_shape is [W, SB], then rewards_all is [W, SB, Steps, Agents, 1]
+        # If batch_size_shape is [TP], then rewards_all is [TP, Steps, Agents, 1]
+        time_dim_idx = len(batch_size_shape)
+        total_rewards = rewards_all.sum(dim=time_dim_idx) # Shape: [Batch..., Agents, 1]
+
         
         # Flatten batch dimensions and remove the last '1' dimension
         # Resulting shape should be [TotalPop, Agents]
