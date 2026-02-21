@@ -5,6 +5,9 @@ from typing import Any, List
 import hydra
 import numpy as np
 import torch
+# import torch._dynamo
+# torch._dynamo.config.cache_size_limit = 128
+
 import wandb
 from deap import base, creator, tools
 from omegaconf import DictConfig
@@ -221,6 +224,10 @@ def run_experiment(cfg: DictConfig):
     random.seed(cfg.seed)
     np.random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
+    
+    # Global Optimizations
+    torch.backends.cudnn.benchmark = True
+    torch.set_float32_matmul_precision('high')
 
     device = "cuda" if torch.cuda.is_available() and cfg.use_gpu else "cpu"
 
@@ -231,6 +238,12 @@ def run_experiment(cfg: DictConfig):
     generations = cfg.evolution.generations
     switch_interval = cfg.evolution.switch_interval
     
+    run_size = 100 if replicates >= 100 else replicates
+    num_runs = max(1, replicates // run_size)
+    if replicates >= 100:
+        replicates = num_runs * run_size
+        print(f"Adjusted total replicates to {replicates} to form {num_runs} independent runs of {run_size} islands.")
+
     work_cfg = cfg.copy()
     
     env_keys = sorted(list(cfg.environments.categories.keys()))
@@ -257,36 +270,20 @@ def run_experiment(cfg: DictConfig):
         print(f"--> Switching Environment to: {category_name}")
         for k, v in params.items():
             print(f"    {k}: {v}")
-            # Update the specific parameter in the config
-            # We use OmegaConf.update to ensure type safety if needed, or just set attribute
             if k in target_cfg:
                  target_cfg[k] = v
-            else:
-                 # If using open_dict, we can add new keys, but simpler to expect keys to exist
-                 # params should ideally match root keys
-                 pass
-        
-        # Manually sync some nested/derived params if needed (e.g. noise scales)
-        # For now, we assume the YAML keys match the arguments VmasEvaluator/Scenario expect
         
     # Init Logger
-    work_cfg.project_name = cfg.project_name # "dynamic_evolution_v1"
+    work_cfg.project_name = cfg.project_name
     
     if cfg.environment.mode == "dynamic" and "-" in cfg.environment.static_category:
          work_cfg.run_name = f"{cfg.environment.mode}_{cfg.environment.static_category}_{cfg.run_name}"
     else:
          work_cfg.run_name = f"{cfg.environment.mode}_{cfg.run_name}"
     
-    # Total Agents = Replicates * N_Agents
-    # Each replicate is an "island" in the islands list
     n_agents_per_island = cfg.n_agents
-    
-    # Update n_envs for VmasEvaluator (Total Population)
     total_agents = replicates * n_agents_per_island
     
-    # Important: VmasEvaluator treats n_envs as the NUMBER OF ENVIRONMENTS (islands)
-    # The config parameter `n_envs` in `ea_evaluation.yaml` was used as total pop size in previous script
-    # Let's align: VmasEvaluator uses cfg.n_envs to determine batch size
     work_cfg.n_envs = replicates 
     
     evaluator = VmasEvaluator(work_cfg, device)
@@ -311,6 +308,8 @@ def run_experiment(cfg: DictConfig):
         wandb.config.update({
             "total_agents": total_agents, 
             "replicates": replicates,
+            "num_runs": num_runs,
+            "run_size": run_size,
             "mode": cfg.environment.mode,
             "generations": generations,
             "elitism": cfg.evolution.elitism_count,
@@ -324,13 +323,30 @@ def run_experiment(cfg: DictConfig):
         })
 
     # Initialize Population
-    print(f"Creating {replicates} islands with {n_agents_per_island} agents each...")
-    islands = ga.create_population(pop_size=replicates, n_agents=n_agents_per_island)
+    print(f"Creating {num_runs} runs containing {run_size} islands with {n_agents_per_island} agents each...")
+    islands = []
+    
+    python_rng_state = random.getstate()
+    np_rng_state = np.random.get_state()
+    torch_rng_state = torch.get_rng_state()
+
+    # Seed each run independently
+    for run_id in range(num_runs):
+        run_seed = cfg.seed + run_id * 1000
+        random.seed(run_seed)
+        np.random.seed(run_seed)
+        torch.manual_seed(run_seed)
+        
+        islands.extend(ga.create_population(pop_size=run_size, n_agents=n_agents_per_island))
+
+    # Restore deterministic RNG sequence
+    random.setstate(python_rng_state)
+    np.random.set_state(np_rng_state)
+    torch.set_rng_state(torch_rng_state)
 
     # Evolution Loop
     start_time = time.time()
     
-    # Initial Environment Setup
     current_env_category = cfg.environment.static_category if cfg.environment.mode == "static" else env_keys[0]
     apply_env_category(work_cfg, current_env_category)
 
@@ -345,34 +361,24 @@ def run_experiment(cfg: DictConfig):
         
         # A. Dynamic Environment Switching
         if cfg.environment.mode == "dynamic":
-             # Switch every 'switch_interval'
-             # 0-250: Env 0
-             # 250-500: Env 1 ...
-             
-             # Calculate stage
              stage_idx = (gen // switch_interval) % len(env_keys)
              new_category = env_keys[stage_idx]
              
              if new_category != current_env_category:
                  current_env_category = new_category
                  apply_env_category(work_cfg, current_env_category)
-                 
-                 # Re-create environment with new parameters
                  del env
-                 evaluator = VmasEvaluator(work_cfg, device) # Re-init evaluator to pick up new work_cfg
+                 evaluator = VmasEvaluator(work_cfg, device)
                  env = evaluator.init_env(env_transform=GenePersistenceTransform)
                  print(f"--> Environment re-initialized for {new_category}")
                  
              if work_cfg.use_wandb:
                  wandb.log({"env_category_idx": stage_idx, "env_category": current_env_category}, step=gen)
-
         
         gen_start = time.time()
 
         # 1. Evaluate
-        with torch.no_grad():
-            # fitness_tensor: [replicates, n_agents] (if evaluate returns [n_envs, n_agents])
-            # Check evaluate return shape in utils.py
+        with torch.inference_mode():
             fitness_tensor = evaluator.evaluate(env, islands)
             
         # Assign fitness back to individuals
@@ -383,31 +389,57 @@ def run_experiment(cfg: DictConfig):
                     individual.fitness.values = (cpu_fitness[i, j],)
             
         gen_duration = time.time() - gen_start
-        max_possible_score = work_cfg.max_steps * 1.75 if work_cfg.targets_quality == "HT" else work_cfg.max_steps
+        max_possible_score = work_cfg.max_steps * 1.75 if getattr(work_cfg, "targets_quality", None) == "HT" else work_cfg.max_steps
         fitness_tensor = fitness_tensor / max_possible_score
 
         # 2. Log Metrics
-        # Scalar Logging (High Frequency)
         if gen_step % cfg.log_freq == 0:
             env_steps_per_sec = ((gen_step - last_gen_step) * n_env_steps) / (time.time() - last_time)
             last_time = time.time()
             last_gen_step = gen_step
             
-            # Log full table snapshot at switch intervals or end of run
             is_snapshot = (gen_step % switch_interval == 0) or (gen_step == generations)
             
+            # Global Logging
             logger.log_metrics_ga(gen, fitness_tensor, env_steps_per_sec, islands, log_table=is_snapshot)
+            if num_runs > 1:
+                for r in range(num_runs):
+                    start_idx = r * run_size
+                    end_idx = min((r + 1) * run_size, replicates)
+                    if start_idx < end_idx:
+                        run_ft = fitness_tensor[start_idx:end_idx]
+                        run_is = islands[start_idx:end_idx]
+                        logger.log_metrics_ga(gen, run_ft, env_steps_per_sec, run_is, log_table=is_snapshot, prefix=f"run_{r}/")
 
-        # Plot Logging (Lower Frequency)
+        # Plot Logging
         plot_freq = getattr(cfg, "plot_freq", 50)
         if gen_step % plot_freq == 0 or gen_step == generations:
             logger.log_heatmap(islands, fitness_tensor, gen)
-            # logger.log_parallel_plot(islands, fitness_tensor, gen)
             logger.log_ternary_density(islands, fitness_tensor, gen)
+            if num_runs > 1:
+                for r in range(num_runs):
+                    start_idx = r * run_size
+                    end_idx = min((r + 1) * run_size, replicates)
+                    if start_idx < end_idx:
+                        run_ft = fitness_tensor[start_idx:end_idx]
+                        run_is = islands[start_idx:end_idx]
+                        logger.log_heatmap(run_is, run_ft, gen, prefix=f"run_{r}/")
+                        logger.log_ternary_density(run_is, run_ft, gen, prefix=f"run_{r}/")
 
-        # 3. Evolve
+        # 3. Evolve independently
         if gen_step < generations:
-            islands = ga.evolve_population(islands, gen)
+            if num_runs > 1:
+                next_islands = []
+                for r in range(num_runs):
+                    start_idx = r * run_size
+                    end_idx = min((r + 1) * run_size, replicates)
+                    if start_idx < end_idx:
+                        chunk = islands[start_idx:end_idx]
+                        next_chunk = ga.evolve_population(chunk, gen)
+                        next_islands.extend(next_chunk)
+                islands = next_islands
+            else:
+                islands = ga.evolve_population(islands, gen)
 
     total_time = time.time() - start_time
     print(f"Evolution Complete. Total time: {total_time:.2f}s")

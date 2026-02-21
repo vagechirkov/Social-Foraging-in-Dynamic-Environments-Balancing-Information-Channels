@@ -26,4 +26,5 @@ uv run abm/info_channels_ea.py \
     environment.mode="$mode" \
     environment.static_category="$category" \
     project_name="dynamic_evolution_v1" \
-    run_name="ea_pop_30"
+    run_name="ea_pop_30" \
+    "${@:3}"

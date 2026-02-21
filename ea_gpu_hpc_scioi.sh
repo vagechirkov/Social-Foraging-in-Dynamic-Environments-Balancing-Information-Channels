@@ -19,7 +19,7 @@ module load nvidia/cuda/12.1
 export PYTHONPATH=$PYTHONPATH:.
 
 source ~/.bashrc
-source .venv/bin/activate
+source .venv2/bin/activate
 
 # echo "uv sync --extra cu121..."
 # uv sync --extra cu121 --verbose
@@ -31,9 +31,10 @@ echo "Running Evolutionary Pipeline on GPU:"
 echo "Mode: $mode"
 echo "Category: $category"
 
-uv run abm/info_channels_ea.py \
+python abm/info_channels_ea.py \
     environment.mode="$mode" \
     environment.static_category="$category" \
     project_name="dynamic_evolution_v1" \
     use_gpu=True \
-    run_name="ea_pop_30_gpu"
+    run_name="ea_gpu" \
+    "${@:3}"

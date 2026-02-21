@@ -62,16 +62,38 @@ uv run python submit_ea.py --dry-run
 uv run python submit_ea.py
 ```
 
+**Customizing Evolution Parameters**
+- `--replicates`: Number of replicates to run for each setup
+- `--generations`: Number of generations for evolution
+- `--switch_interval`: Number of steps between environment switches
+- `--selection`: Selection method (`individual-global` or `individual-local`)
+- `--multi_level_selection`: Enable multi-level selection (`true` or `false`)
+- `--mutation_prob`: The probability of mutation during evolution
+
+Example:
+```bash
+uv run python submit_ea.py --replicates 50 --generations 2000 --switch_interval 250 --selection individual-global --multi_level_selection True --mutation_prob 0.6
+```
+
 **GPU Execution**
 To dispatch the evolutionary algorithm to the GPU nodes (e.g. `ex_scioi_gpu`), append the `--gpu` flag:
 ```bash
-uv run python submit_ea.py --gpu --dry-run
-uv run python submit_ea.py --gpu
+uv run --active --extra cu121 python submit_ea.py --gpu --dry-run
+uv run --active --extra cu121 python submit_ea.py --gpu --replicates 500 --generations 4000 --switch_interval 300 --selection individual-local --multi_level_selection True --mutation_prob 0.3
+uv run --active --extra cu121 python submit_ea.py --gpu --replicates 500 --generations 4000 --switch_interval 300 --selection individual-global --multi_level_selection False --mutation_prob 0.3
+
+uv run --active --extra cu121 python submit_ea.py --gpu --replicates 500 --generations 4000 --switch_interval 100 --selection individual-local --multi_level_selection True --mutation_prob 0.3
+uv run --active --extra cu121 python submit_ea.py --gpu --replicates 500 --generations 4000 --switch_interval 100 --selection individual-global --multi_level_selection False --mutation_prob 0.3
 ```
 
 This script submits:
 - One job for the **Dynamic** pipeline for each pair of environments.
 - Separate jobs for each **Static** environment category (`solitary`, `collective`, `info_constrained`).
+
+To check GPU usage:
+```bash
+srun --jobid=123456 nvidia-smi
+```
 
 ## Run 3 channels parameter sweep
 ```bash

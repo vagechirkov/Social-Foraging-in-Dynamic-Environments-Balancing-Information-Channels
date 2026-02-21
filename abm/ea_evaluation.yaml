@@ -12,7 +12,7 @@ evolution:
   generations: 2000
   replicates: 30
   switch_interval: 250
-  elitism_count: 5
+  elitism_count: 1
   tournament_size: 4
   mutation_prob: 0.6  # mutpb
   crossover_prob: 0.0 # cxpb
@@ -42,12 +42,12 @@ environments:
       spot_radius: 0.25
       dist_noise_scale_priv: 0.05
     
-    info_constrained:
-      target_speed: 0.3
-      cost_priv: 0.08
-      cost_belief: 0.08
-      spot_radius: 1.0
-      dist_noise_scale_priv: 0.05
+    # info_constrained:
+    #   target_speed: 0.3
+    #   cost_priv: 0.08
+    #   cost_belief: 0.08
+    #   spot_radius: 1.0
+    #   dist_noise_scale_priv: 0.05
 
 
 # Genetic Algorithm / Exploration Settings
@@ -59,10 +59,10 @@ top_k: 5
 # parameters
 x_dim: 2
 y_dim: 2
-n_agents: 30
+n_agents: 15
 n_targets: 1
 targets_quality: "HM"
-max_steps: 1000 # 5000 simulation steps per generation
+max_steps: 500 # 5000 simulation steps per generation
 target_persistence: 20
 target_movement_pattern: "crw"
 relocation_interval: 1000

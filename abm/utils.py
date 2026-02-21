@@ -252,24 +252,26 @@ class VmasEvaluator:
 
         policy = TensorDictModule(policy_func, in_keys=["genes"], out_keys=[env.action_key])
 
+        # Optimize rollout step with torch.compile to reduce CPU dispatch overhead
+        # reduce-overhead mode uses CUDA graphs, so it should be safely disabled on CPU runs
+        # is_cpu = str(self.device) == "cpu"
+        # @torch.compile(backend="inductor", fullgraph=False, disable=is_cpu)
+        def compiled_step(td):
+            td = policy(td)
+            td = env.step(td)
+            return td["next"], td["next", "agents", "reward"]
+
         # Rollout
         # Compute Rewards Incrementally
-        with torch.no_grad():
+        with torch.inference_mode():
             tensordict = env.reset(initial_tensordict)
             # Create a tensor to accumulate rewards. We expect rewards to be shaped matching env batches.
             # Shape for parallel envs is [Workers, SubBatch, Agents, 1], otherwise [TotalPop, Agents, 1]
             total_rewards = torch.zeros(batch_size_shape + [self.cfg.n_agents, 1], device=self.device)
 
             for _ in range(self.cfg.max_steps):
-                # 1. Action policy
-                tensordict = policy(tensordict)
-                # 2. Step Environment
-                tensordict = env.step(tensordict)
-                # 3. Accumulate step reward. TensorDict returns shape [Batch..., Agents, 1] under "next", "agents", "reward"
-                step_reward = tensordict["next", "agents", "reward"]
+                tensordict, step_reward = compiled_step(tensordict)
                 total_rewards += step_reward
-                # 4. Step forward the state
-                tensordict = tensordict["next"]
                 
         # Time dimension scaling previously used `total_rewards = rewards_all.sum(dim=time_dim_idx)`
         # `total_rewards` already has the shape `[Batch..., Agents, 1]` accumulated across the time span.
@@ -320,7 +322,16 @@ class ExperimentLogger:
             config=config_dict
         )
 
-    def log_metrics_ga(self, gen: int, fitness_tensor: torch.Tensor, steps_per_sec: float, islands: List[List[Any]], log_table: bool = False):
+    def log_metrics_ga(
+        self, 
+        gen: int, 
+        fitness_tensor: torch.Tensor, 
+        steps_per_sec: float, 
+        islands: List[List[Any]], 
+        log_table: bool = False, 
+        prefix: str = "", 
+        extra_metrics: dict = None
+    ):
         # 1. Global Statistics (All Agents)
         global_mean = fitness_tensor.mean().item()
         global_median = fitness_tensor.median().item()
@@ -345,17 +356,19 @@ class ExperimentLogger:
                 "gen": gen,
                 
                 # Scalars
-                "global_mean": global_mean,
-                "global_max": global_max,
-                "steps_per_sec": steps_per_sec,
+                f"{prefix}global_mean": global_mean,
+                f"{prefix}global_max": global_max,
+                f"{prefix}steps_per_sec": steps_per_sec,
                 
                 # Fitness Histograms
-                "hist/fitness_global": wandb.Histogram(fitness_tensor.cpu().numpy().flatten()),
-                "hist/fitness_top_k": wandb.Histogram(top_k_agents_fitness.cpu().numpy().flatten()),
+                f"{prefix}hist/fitness_global": wandb.Histogram(fitness_tensor.cpu().numpy().flatten()),
+                f"{prefix}hist/fitness_top_k": wandb.Histogram(top_k_agents_fitness.cpu().numpy().flatten()),
                 
                 # Env Mean Histogram
-                "hist/env_means": wandb.Histogram(env_means.cpu().numpy()),
+                f"{prefix}hist/env_means": wandb.Histogram(env_means.cpu().numpy()),
             }
+            if extra_metrics:
+                metrics.update(extra_metrics)
 
             # 4. Channel Probabilities (Histograms)
             # Calculate probabilities for ALL agents
@@ -375,21 +388,21 @@ class ExperimentLogger:
             for i in active_indices:
                 name = CHANNEL_NAMES[i]
                 # Global Histogram for this channel
-                metrics[f"hist/prob_global_{name}"] = wandb.Histogram(all_probs[:, i].numpy())
+                metrics[f"{prefix}hist/prob_global_{name}"] = wandb.Histogram(all_probs[:, i].numpy())
                 # Top-K Histogram for this channel
-                metrics[f"hist/prob_top_k_{name}"] = wandb.Histogram(top_k_probs[:, i].numpy())
+                metrics[f"{prefix}hist/prob_top_k_{name}"] = wandb.Histogram(top_k_probs[:, i].numpy())
    
             # 5. Best Individual Scalars
             best_ind_idx = torch.argmax(fitness_tensor.view(-1))
             best_probs = all_probs[best_ind_idx]
-            metrics["best/fitness"] = global_max
+            metrics[f"{prefix}best/fitness"] = global_max
             for i in active_indices:
-               metrics[f"best/prob_{CHANNEL_NAMES[i]}"] = best_probs[i].item()
+               metrics[f"{prefix}best/prob_{CHANNEL_NAMES[i]}"] = best_probs[i].item()
 
             # 6. Average Probabilities (Scalars)
             avg_probs = all_probs.mean(dim=0)
             for i in active_indices:
-                metrics[f"avg/prob_{CHANNEL_NAMES[i]}"] = avg_probs[i].item()
+                metrics[f"{prefix}avg/prob_{CHANNEL_NAMES[i]}"] = avg_probs[i].item()
 
             # 7. Periodic Table Logging (Snapshot)
             if log_table:
@@ -407,20 +420,21 @@ class ExperimentLogger:
                         row.append(top_k_probs[i, ch_idx].item())
                     tbl.add_data(*row)
                 
-                metrics["population_snapshot"] = tbl
+                metrics[f"{prefix}population_snapshot"] = tbl
 
             wandb.log(metrics, step=gen)
 
-    def log_heatmap(self, islands, fitness_tensor, gen):
+    def log_heatmap(self, islands, fitness_tensor, gen, prefix: str = ""):
         """Generates and logs the strategy heatmap."""
         fig = self._generate_heatmap_fig(islands, fitness_tensor)
         if self.use_wandb:
-            wandb.log({"strategy_heatmap": wandb.Image(fig)}, step=gen)
+            wandb.log({f"{prefix}strategy_heatmap": wandb.Image(fig)}, step=gen)
         if self.save_fig:
-            plt.savefig(f"heatmap_gen_{gen:04d}.png", dpi=150, bbox_inches='tight')
+            prefix_file = prefix.replace("/", "_")
+            plt.savefig(f"{prefix_file}heatmap_gen_{gen:04d}.png", dpi=150, bbox_inches='tight')
         plt.close(fig)
 
-    def log_ternary_density(self, islands, fitness_tensor, gen):
+    def log_ternary_density(self, islands, fitness_tensor, gen, prefix: str = ""):
         """
         Generates ternary density plots (heatmaps) of individual strategies
         for both the Top K groups and the entire population.
@@ -448,24 +462,26 @@ class ExperimentLogger:
 
         if self.use_wandb:
             wandb.log({
-                "ternary_density_all": wandb.Image(fig_all),
-                "ternary_density_top_k": wandb.Image(fig_top)
+                f"{prefix}ternary_density_all": wandb.Image(fig_all),
+                f"{prefix}ternary_density_top_k": wandb.Image(fig_top)
             }, step=gen)
 
         if self.save_fig:
-            fig_all.savefig(f"ternary_all_gen_{gen:04d}.png", dpi=150, bbox_inches='tight')
-            fig_top.savefig(f"ternary_top_k_gen_{gen:04d}.png", dpi=150, bbox_inches='tight')
+            prefix_file = prefix.replace("/", "_")
+            fig_all.savefig(f"{prefix_file}ternary_all_gen_{gen:04d}.png", dpi=150, bbox_inches='tight')
+            fig_top.savefig(f"{prefix_file}ternary_top_k_gen_{gen:04d}.png", dpi=150, bbox_inches='tight')
 
         plt.close(fig_all)
         plt.close(fig_top)
 
-    def log_parallel_plot(self, islands, fitness_tensor, gen):
+    def log_parallel_plot(self, islands, fitness_tensor, gen, prefix: str = ""):
         """Generates and logs the parallel coordinate plot for Top K islands."""
         fig = self._generate_parallel_plot_fig(islands, fitness_tensor)
         if self.use_wandb:
-            wandb.log({"parallel_plot": wandb.Image(fig)}, step=gen)
+            wandb.log({f"{prefix}parallel_plot": wandb.Image(fig)}, step=gen)
         if self.save_fig:
-            plt.savefig(f"parallel_plot_{gen:04d}.png", dpi=150, bbox_inches='tight')
+            prefix_file = prefix.replace("/", "_")
+            plt.savefig(f"{prefix_file}parallel_plot_{gen:04d}.png", dpi=150, bbox_inches='tight')
         plt.close(fig)
 
     def log_ternary_plot(self, plot_data: List[Dict[str, float]], resolution: int, midpoint: Optional[float] = None):
