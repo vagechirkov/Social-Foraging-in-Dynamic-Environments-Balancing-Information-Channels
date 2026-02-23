@@ -9,8 +9,6 @@ import torch
 import wandb
 from deap import base, creator, tools
 from omegaconf import DictConfig
-from concurrent.futures import ProcessPoolExecutor
-import multiprocessing
 
 from abm.utils import ExperimentLogger, GenePersistenceTransform, VmasEvaluator
 
@@ -18,41 +16,6 @@ from abm.utils import ExperimentLogger, GenePersistenceTransform, VmasEvaluator
 # Must be defined at module level for multiprocessing pickling compatibility
 creator.create("FitnessMax", base.Fitness, weights=(1.0,))
 creator.create("Individual", list, fitness=creator.FitnessMax)
-
-def _evolve_single_island(args):
-    island, cxpb, mutpb, elitism_count, toolbox, frozen_indices = args
-    
-    # 1. Select offspring
-    offspring = toolbox.select(island, len(island))
-    offspring = list(map(toolbox.clone, offspring))
-    
-    # 2. Identify the Elite
-    best_inds = tools.selBest(island, elitism_count)
-    elites = [toolbox.clone(ind) for ind in best_inds]
-
-    # 3. Apply Crossover and Mutation
-    for child1, child2 in zip(offspring[::2], offspring[1::2]):
-        if random.random() < cxpb:
-            toolbox.mate(child1, child2)
-            del child1.fitness.values
-            del child2.fitness.values
-
-    for mutant in offspring:
-        if random.random() < mutpb:
-            toolbox.mutate(mutant)
-            del mutant.fitness.values
-    
-    # 4. Apply Constraints
-    for ind in offspring:
-        for i in frozen_indices:
-            if i < len(ind):
-                ind[i] = -100
-
-    # 5. Re-inject Elitism
-    for i in range(len(elites)):
-        offspring[i] = elites[i]
-        
-    return offspring
 
 
 class GeneticAlgorithm:
@@ -155,15 +118,40 @@ class GeneticAlgorithm:
 
     def _evolve_local(self, islands: List[List[Any]], generation: int) -> List[List[Any]]:
         """Applies Standard GA Pipeline with Elitism to all islands independently."""
-        # We pass the toolbox and hyperparams so the worker processes have context
-        tasks = [
-            (island, self.cxpb, self.mutpb, self.elitism_count, self.toolbox, self.frozen_indices) 
-            for island in islands
-        ]
-        
-        # Fire across all available CPU cores
-        with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
-            next_gen_islands = list(executor.map(_evolve_single_island, tasks))
+        next_gen_islands = []
+        for island in islands:
+            # 1. Select offspring (Tournament)
+            offspring = self.toolbox.select(island, len(island))
+            offspring = list(map(self.toolbox.clone, offspring))
+            
+            # 2. Identify the Elite (Best parent) BEFORE modification
+            # We must clone it to ensure it isn't mutated later
+            best_inds = tools.selBest(island, self.elitism_count)
+            elites = [self.toolbox.clone(ind) for ind in best_inds]
+
+            # 3. Apply Crossover and Mutation to offspring
+            for child1, child2 in zip(offspring[::2], offspring[1::2]):
+                if random.random() < self.cxpb:
+                    self.toolbox.mate(child1, child2)
+                    del child1.fitness.values
+                    del child2.fitness.values
+
+            for mutant in offspring:
+                if random.random() < self.mutpb:
+                    self.toolbox.mutate(mutant)
+                    del mutant.fitness.values
+            
+            # 4. Apply Constraints (Frozen Indices)
+            for ind in offspring:
+                 self._apply_frozen_constraints(ind)
+
+            # 5. Re-inject Elitism
+            # Replace the first offspring with the preserved elite parent
+            # This ensures the max fitness of the population never decreases
+            for i in range(len(elites)):
+                offspring[i] = elites[i]
+            
+            next_gen_islands.append(offspring)
 
         return next_gen_islands
 
@@ -236,8 +224,8 @@ def run_experiment(cfg: DictConfig):
     torch.manual_seed(cfg.seed)
     
     # Global Optimizations
-    torch.backends.cudnn.benchmark = True
-    torch.set_float32_matmul_precision('high')
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
 
     device = "cuda" if torch.cuda.is_available() and cfg.use_gpu else "cpu"
 
