@@ -274,7 +274,6 @@ class VmasEvaluator:
         time_dim_idx = len(batch_size_shape)
         total_rewards = rewards_all.sum(dim=time_dim_idx) # Shape: [Batch..., Agents, 1]
 
-        
         # Flatten batch dimensions and remove the last '1' dimension
         # Resulting shape should be [TotalPop, Agents]
         if isinstance(env.base_env, ParallelEnv):

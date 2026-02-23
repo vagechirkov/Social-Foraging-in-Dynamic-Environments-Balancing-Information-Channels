@@ -4,8 +4,8 @@ run_name: "dynamic_ea"
 seed: 42
 use_wandb: true
 use_gpu: false
-log_freq: 1
-plot_freq: 10
+log_freq: 5
+plot_freq: 25
 
 # Evolution Settings
 evolution:

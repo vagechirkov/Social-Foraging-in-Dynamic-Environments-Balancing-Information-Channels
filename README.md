@@ -78,12 +78,12 @@ uv run python submit_ea.py --replicates 50 --generations 2000 --switch_interval 
 **GPU Execution**
 To dispatch the evolutionary algorithm to the GPU nodes (e.g. `ex_scioi_gpu`), append the `--gpu` flag:
 ```bash
-uv run --active --extra cu121 python submit_ea.py --gpu --dry-run
-uv run --active --extra cu121 python submit_ea.py --gpu --replicates 500 --generations 4000 --switch_interval 300 --selection individual-local --multi_level_selection True --mutation_prob 0.3
-uv run --active --extra cu121 python submit_ea.py --gpu --replicates 500 --generations 4000 --switch_interval 300 --selection individual-global --multi_level_selection False --mutation_prob 0.3
+uv run --extra cu121 python submit_ea.py --gpu --dry-run
+uv run --extra cu121 python submit_ea.py --gpu --replicates 2000 --generations 3000 --switch_interval 300 --selection individual-local --multi_level_selection True --mutation_prob 0.1
+uv run --extra cu121 python submit_ea.py --gpu --replicates 2000 --generations 3000 --switch_interval 300 --selection individual-global --multi_level_selection False --mutation_prob 0.1
 
-uv run --active --extra cu121 python submit_ea.py --gpu --replicates 500 --generations 4000 --switch_interval 100 --selection individual-local --multi_level_selection True --mutation_prob 0.3
-uv run --active --extra cu121 python submit_ea.py --gpu --replicates 500 --generations 4000 --switch_interval 100 --selection individual-global --multi_level_selection False --mutation_prob 0.3
+uv run --extra cu121 python submit_ea.py --gpu --replicates 2000 --generations 3000 --switch_interval 100 --selection individual-local --multi_level_selection True --mutation_prob 0.1
+uv run --extra cu121 python submit_ea.py --gpu --replicates 2000 --generations 3000 --switch_interval 100 --selection individual-global --multi_level_selection False --mutation_prob 0.1
 ```
 
 This script submits:

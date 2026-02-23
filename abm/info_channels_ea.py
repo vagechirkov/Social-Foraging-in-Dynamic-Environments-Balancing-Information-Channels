@@ -5,12 +5,12 @@ from typing import Any, List
 import hydra
 import numpy as np
 import torch
-# import torch._dynamo
-# torch._dynamo.config.cache_size_limit = 128
 
 import wandb
 from deap import base, creator, tools
 from omegaconf import DictConfig
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
 
 from abm.utils import ExperimentLogger, GenePersistenceTransform, VmasEvaluator
 
@@ -18,6 +18,41 @@ from abm.utils import ExperimentLogger, GenePersistenceTransform, VmasEvaluator
 # Must be defined at module level for multiprocessing pickling compatibility
 creator.create("FitnessMax", base.Fitness, weights=(1.0,))
 creator.create("Individual", list, fitness=creator.FitnessMax)
+
+def _evolve_single_island(args):
+    island, cxpb, mutpb, elitism_count, toolbox, frozen_indices = args
+    
+    # 1. Select offspring
+    offspring = toolbox.select(island, len(island))
+    offspring = list(map(toolbox.clone, offspring))
+    
+    # 2. Identify the Elite
+    best_inds = tools.selBest(island, elitism_count)
+    elites = [toolbox.clone(ind) for ind in best_inds]
+
+    # 3. Apply Crossover and Mutation
+    for child1, child2 in zip(offspring[::2], offspring[1::2]):
+        if random.random() < cxpb:
+            toolbox.mate(child1, child2)
+            del child1.fitness.values
+            del child2.fitness.values
+
+    for mutant in offspring:
+        if random.random() < mutpb:
+            toolbox.mutate(mutant)
+            del mutant.fitness.values
+    
+    # 4. Apply Constraints
+    for ind in offspring:
+        for i in frozen_indices:
+            if i < len(ind):
+                ind[i] = -100
+
+    # 5. Re-inject Elitism
+    for i in range(len(elites)):
+        offspring[i] = elites[i]
+        
+    return offspring
 
 
 class GeneticAlgorithm:
@@ -120,40 +155,15 @@ class GeneticAlgorithm:
 
     def _evolve_local(self, islands: List[List[Any]], generation: int) -> List[List[Any]]:
         """Applies Standard GA Pipeline with Elitism to all islands independently."""
-        next_gen_islands = []
-        for island in islands:
-            # 1. Select offspring (Tournament)
-            offspring = self.toolbox.select(island, len(island))
-            offspring = list(map(self.toolbox.clone, offspring))
-            
-            # 2. Identify the Elite (Best parent) BEFORE modification
-            # We must clone it to ensure it isn't mutated later
-            best_inds = tools.selBest(island, self.elitism_count)
-            elites = [self.toolbox.clone(ind) for ind in best_inds]
-
-            # 3. Apply Crossover and Mutation to offspring
-            for child1, child2 in zip(offspring[::2], offspring[1::2]):
-                if random.random() < self.cxpb:
-                    self.toolbox.mate(child1, child2)
-                    del child1.fitness.values
-                    del child2.fitness.values
-
-            for mutant in offspring:
-                if random.random() < self.mutpb:
-                    self.toolbox.mutate(mutant)
-                    del mutant.fitness.values
-            
-            # 4. Apply Constraints (Frozen Indices)
-            for ind in offspring:
-                 self._apply_frozen_constraints(ind)
-
-            # 5. Re-inject Elitism
-            # Replace the first offspring with the preserved elite parent
-            # This ensures the max fitness of the population never decreases
-            for i in range(len(elites)):
-                offspring[i] = elites[i]
-            
-            next_gen_islands.append(offspring)
+        # We pass the toolbox and hyperparams so the worker processes have context
+        tasks = [
+            (island, self.cxpb, self.mutpb, self.elitism_count, self.toolbox, self.frozen_indices) 
+            for island in islands
+        ]
+        
+        # Fire across all available CPU cores
+        with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+            next_gen_islands = list(executor.map(_evolve_single_island, tasks))
 
         return next_gen_islands
 
@@ -237,10 +247,10 @@ def run_experiment(cfg: DictConfig):
     replicates = cfg.evolution.replicates
     generations = cfg.evolution.generations
     switch_interval = cfg.evolution.switch_interval
-    
-    run_size = 100 if replicates >= 100 else replicates
+
+    run_size = 200 if replicates >= 200 else replicates
     num_runs = max(1, replicates // run_size)
-    if replicates >= 100:
+    if replicates >= 200:
         replicates = num_runs * run_size
         print(f"Adjusted total replicates to {replicates} to form {num_runs} independent runs of {run_size} islands.")
 
@@ -361,19 +371,19 @@ def run_experiment(cfg: DictConfig):
         
         # A. Dynamic Environment Switching
         if cfg.environment.mode == "dynamic":
-             stage_idx = (gen // switch_interval) % len(env_keys)
-             new_category = env_keys[stage_idx]
-             
-             if new_category != current_env_category:
-                 current_env_category = new_category
-                 apply_env_category(work_cfg, current_env_category)
-                 del env
-                 evaluator = VmasEvaluator(work_cfg, device)
-                 env = evaluator.init_env(env_transform=GenePersistenceTransform)
-                 print(f"--> Environment re-initialized for {new_category}")
-                 
-             if work_cfg.use_wandb:
-                 wandb.log({"env_category_idx": stage_idx, "env_category": current_env_category}, step=gen)
+            stage_idx = (gen // switch_interval) % len(env_keys)
+            new_category = env_keys[stage_idx]
+            
+            if new_category != current_env_category:
+                current_env_category = new_category
+                apply_env_category(work_cfg, current_env_category)
+                del env
+                evaluator = VmasEvaluator(work_cfg, device)
+                env = evaluator.init_env(env_transform=GenePersistenceTransform)
+                print(f"--> Environment re-initialized for {new_category}")
+                
+            if work_cfg.use_wandb:
+                wandb.log({"env_category_idx": stage_idx, "env_category": current_env_category}, step=gen)
         
         gen_start = time.time()
 
@@ -382,12 +392,10 @@ def run_experiment(cfg: DictConfig):
             fitness_tensor = evaluator.evaluate(env, islands)
             
         # Assign fitness back to individuals
-        cpu_fitness = fitness_tensor.cpu().numpy()
-        for i, island in enumerate(islands):
-            for j, individual in enumerate(island):
-                 if i < len(cpu_fitness) and j < len(cpu_fitness[i]):
-                    individual.fitness.values = (cpu_fitness[i, j],)
-            
+        flat_population = [ind for island in islands for ind in island]
+        flat_fitness = fitness_tensor.cpu().numpy().flatten()
+        for ind, fit in zip(flat_population, flat_fitness):
+            ind.fitness.values = (float(fit),)
         gen_duration = time.time() - gen_start
         max_possible_score = work_cfg.max_steps * 1.75 if getattr(work_cfg, "targets_quality", None) == "HT" else work_cfg.max_steps
         fitness_tensor = fitness_tensor / max_possible_score

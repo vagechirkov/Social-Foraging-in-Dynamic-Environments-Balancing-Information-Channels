@@ -4,11 +4,11 @@
 #SBATCH --output=job_%j.log                         # Output log file (%j will be replaced with job ID)
 #SBATCH --error=job_%j.log                          # Error log file
 #SBATCH --ntasks=1                                  # Number of tasks
-#SBATCH --partition=ex_scioi_gpu                    # Partition to submit to
+#SBATCH --partition=gpu,ex_scioi_gpu,scioi_gpu,ex_scioi_a100nv # Partition to submit to
 #SBATCH --gres=gpu:1                                # Request 1 GPU
 #SBATCH --cpus-per-task=10                          # Number of CPUs
-#SBATCH --time=7-00:00:00                           # Maximum runtime (hh:mm:ss)
-#SBATCH --mem=16G                                   # Memory allocation
+#SBATCH --time=3-00:00:00                           # Maximum runtime (hh:mm:ss)
+#SBATCH --mem=128G                                   # Memory allocation
 
 module load nvidia/cuda/12.1
 
