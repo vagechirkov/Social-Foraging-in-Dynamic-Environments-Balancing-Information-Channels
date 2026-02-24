@@ -22,6 +22,12 @@ echo "Running Evolutionary Pipeline:"
 echo "Mode: $mode"
 echo "Category: $category"
 
+# WandB fault-tolerance configuration (tolerates up to 24h blackout)
+export WANDB_HTTP_TIMEOUT=1200    # 20 minutes per request
+export WANDB_INIT_TIMEOUT=86400   # 24 hours init timeout
+export WANDB_HTTP_RETRIES=4000    # high number of retries
+export WANDB__SERVICE_WAIT=86400  # service wait time
+
 uv run abm/info_channels_ea.py \
     environment.mode="$mode" \
     environment.static_category="$category" \
