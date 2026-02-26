@@ -10,14 +10,16 @@ import matplotlib.ticker as ticker
 import wandb
 import numpy as np
 import re
+import math
 
 WANDB_PROJECT = "dynamic_evolution_v1"
 OUTPUT_DIR = "outputs/publication_plots"
 CACHE_FILE = os.path.join(OUTPUT_DIR, "metrics_cache.csv")
+HIST_CACHE_FILE = os.path.join(OUTPUT_DIR, "hist_cache.csv")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-sns.set_theme(style="whitegrid", context="paper", font_scale=1.5)
+sns.set_theme(style="whitegrid", context="paper", font_scale=2.0)
 
 api = wandb.Api()
 
@@ -55,23 +57,25 @@ print(f"Found {len(runs)} runs matching criteria.")
 
 def process_and_plot(runs):
     # 1. Fetch metrics or load from cache
-    if os.path.exists(CACHE_FILE):
+    if os.path.exists(CACHE_FILE) and os.path.exists(HIST_CACHE_FILE):
         print("\n--- Loading Metrics from Cache ---")
         df = pd.read_csv(CACHE_FILE)
-        # Reconstruct valid_runs to just have references for gif download
-        # since we won't need to re-query history
-        valid_runs = [run for run in runs if run.state == "finished"]
+        df_hist = pd.read_csv(HIST_CACHE_FILE)
+        # Drop rows where std could not be calculated
+        df_hist = df_hist.dropna(subset=['Private_SD', 'Belief_SD', 'None_SD'])
+        valid_runs = [run for run in runs if run.state in ["finished", "running"]]
     else:
         print("\n--- Fetching Metrics ---")
         all_metrics_data = []
+        all_hist_data = [] # We'll store mean and std directly instead of samples to fix SD shade rendering
         valid_runs = []
         for run in runs:
-            if run.state != "finished":
+            if run.state not in ["finished", "running"]:
                 print(f"Skipping run {run.id} as it is in state {run.state}")
                 continue
 
             valid_runs.append(run)
-            print(f"Fetching metrics for run: {run.id} ({run.name})")
+            print(f"Fetching metrics for run: {run.id} ({run.name}) [state: {run.state}]")
             
             cfg = run.config
             mode = cfg.get("environment", {}).get("mode", "Unknown")
@@ -88,9 +92,14 @@ def process_and_plot(runs):
             
             sel_name = get_selection_name(sel, multi_level)
             
+            # Use `hist/xxx` as requested
+            keys_to_fetch = [
+                "hist/prob_global_Priv",
+                "hist/prob_global_Belief",
+                "hist/prob_global_None"
+            ]
+            
             num_runs = cfg.get("num_runs", 1)
-
-            keys_to_fetch = []
             for r in range(num_runs):
                 keys_to_fetch.extend([
                     f"run_{r}/global_mean",
@@ -111,6 +120,44 @@ def process_and_plot(runs):
                         step_metrics[step][k] = row[k]
                         
             for step, metrics in step_metrics.items():
+                
+                # Global Hist Data parsing
+                priv_hist = metrics.get(f"hist/prob_global_Priv")
+                belief_hist = metrics.get(f"hist/prob_global_Belief")
+                none_hist = metrics.get(f"hist/prob_global_None")
+                
+                def calc_hist_stats(h):
+                    if not isinstance(h, dict) or 'bins' not in h or 'values' not in h:
+                        return np.nan, np.nan
+                    bins = np.array(h['bins'])
+                    values = np.array(h['values'])
+                    midpoints = (bins[:-1] + bins[1:]) / 2.0
+                    total = values.sum()
+                    if total == 0:
+                        return np.nan, np.nan
+                    mean = np.sum(midpoints * values) / total
+                    var = np.sum(values * (midpoints - mean)**2) / total
+                    return mean, math.sqrt(var)
+
+                p_mean, p_sd = calc_hist_stats(priv_hist)
+                b_mean, b_sd = calc_hist_stats(belief_hist)
+                n_mean, n_sd = calc_hist_stats(none_hist)
+                
+                if not np.isnan(p_sd) and not np.isnan(b_sd) and not np.isnan(n_sd):
+                   all_hist_data.append({
+                       "mode": mode,
+                       "switch_interval": sw_int,
+                       "mutation_prob": mut_prob,
+                       "selection": sel_name,
+                       "Generation": step,
+                       "Private_Mean": p_mean,
+                       "Private_SD": p_sd,
+                       "Belief_Mean": b_mean,
+                       "Belief_SD": b_sd,
+                       "None_Mean": n_mean,
+                       "None_SD": n_sd
+                   })
+
                 for r in range(num_runs):
                     if f"run_{r}/global_mean" in metrics:
                         all_metrics_data.append({
@@ -124,115 +171,220 @@ def process_and_plot(runs):
                             "Belief": metrics.get(f"run_{r}/avg/prob_Belief", np.nan),
                             "None": metrics.get(f"run_{r}/avg/prob_None", np.nan),
                         })
-                        
+
         if not all_metrics_data:
             print("No metrics data found.")
             return
             
         df = pd.DataFrame(all_metrics_data)
+        df_hist = pd.DataFrame(all_hist_data)
         df.to_csv(CACHE_FILE, index=False)
-        print(f"Metrics cached to {CACHE_FILE}")
+        df_hist.to_csv(HIST_CACHE_FILE, index=False)
+        print(f"Metrics cached.")
 
     print("\n--- Generating Plots ---")
     
-    # We want to combine dynamic environments and static extremes (static-solitary, static-collective)
-    # The 'switch_interval' column has '100', '300', 'static-solitary', 'static-collective'
-    # Group by mutation probability
+    channel_base_colors = {
+        "Private": {"dynamic": "#009E73", "static-solitary": "#70deb8", "static-collective": "#00664b"},
+        "Belief": {"dynamic": "#56B4E9", "static-solitary": "#a6daff", "static-collective": "#1a7ab0"},
+        "None": {"dynamic": "#E69F00", "static-solitary": "#ffd275", "static-collective": "#cc8d00"}
+    }
+    
+    # Plotting styles - list of pixels for seaborn dashes. [dash_points, space_points], or "" for solid line.
+    line_dashes = {"dynamic": [2, 2], "static-solitary": "", "static-collective": ""}
+    
+    # Pre-process dataset to be combined dynamically correctly
+    plot_df = []
     
     for mut_prob, mut_group in df.groupby("mutation_prob"):
-        print(f"Plotting for mutation_prob={mut_prob}")
-        
-        # Determine the dynamic intervals present for this mutation
         dynamic_intervals = [sw for sw in mut_group["switch_interval"].unique() if isinstance(sw, (int, float)) or (isinstance(sw, str) and sw.isdigit())]
         
         for dyn_sw in dynamic_intervals:
-            print(f"  Generating Fitness Plot combining static extremes and dynamic sw={dyn_sw}")
-            
-            # Filter the dataframe to just the static defaults + this dynamic switch
             target_intervals = [dyn_sw, "static-solitary", "static-collective"]
             sub_df = mut_group[mut_group["switch_interval"].isin(target_intervals)].copy()
             
-            # Plot Fitness (Stack Vertically)
-            g = sns.relplot(
-                data=sub_df, 
-                kind="line",
-                x="Generation", 
-                y="Fitness", 
-                row="selection", # Stacking vertically
-                hue="switch_interval",
-                style="switch_interval",
-                errorbar=('ci', 95),
-                n_boot=50,
-                palette="Set1",
-                height=4, aspect=1.8 # Taller stacked plots
+            sub_df["Environment"] = sub_df["switch_interval"].apply(
+                lambda x: "dynamic" if str(x) == str(dyn_sw) else str(x)
             )
-            g.set(ylim=(0.35, 0.75), xlim=(0, 3000))
-            g.fig.suptitle(f"Mean Fitness (Mut Prob: {mut_prob}, Dynamic Env vs Static sw={dyn_sw})", y=1.05)
+            sub_df["Dynamic_Switch"] = int(dyn_sw) # Keep track of which grid panel this belongs to
             
-            dyn_sw_int = int(dyn_sw)
-            tick_interval = dyn_sw_int * 3 if dyn_sw_int == 100 else dyn_sw_int
-            for ax in g.axes.flat:
-                # Show every 3rd tick for 100 to avoid clutter
+            plot_df.append(sub_df)
+            
+    plot_df = pd.concat(plot_df)
+    
+    # Ensure standard ordering for selection panels
+    sel_order = ["individual-global", "multilevel-local"]
+            
+    for mut_prob, sub_mut_group in plot_df.groupby("mutation_prob"):
+        print(f"Plotting for mutation_prob={mut_prob}")
+
+        # --- Fitness Plot 2x2 Grid (Rows = Selection, Cols = Switch Interval)
+        g = sns.relplot(
+            data=sub_mut_group, 
+            kind="line",
+            x="Generation", 
+            y="Fitness", 
+            row="selection", 
+            col="Dynamic_Switch",
+            hue="Environment",
+            style="Environment",
+            dashes=line_dashes,
+            errorbar=('ci', 95),
+            n_boot=30,
+            palette={"dynamic": "#D55E00", "static-collective": "#0072B2", "static-solitary": "#009E73"},
+            height=6, aspect=2, # Wider figures
+            row_order=sel_order,
+            col_order=[100, 300],
+            linewidth=2.5,
+            facet_kws={'margin_titles': True}
+        )
+        g.set(ylim=(0.4, 0.7), xlim=(0, 3000))
+        g.set_titles(row_template="{row_name}", col_template="{col_name}")
+        
+        sns.move_legend(g, "lower center", bbox_to_anchor=(0.5, -0.05), title="", ncol=3)
+
+        # We configure ticks dynamically based on the column
+        for ax in g.axes.flat:
+            # Try to grab the col title (e.g. Dynamic_Switch = 100)
+            col_match = re.search(r'Dynamic_Switch\s*=\s*(\d+)', ax.get_title())
+            if col_match:
+                dyn_sw_int = int(col_match.group(1))
+                tick_interval = dyn_sw_int * 3 if dyn_sw_int == 100 else dyn_sw_int
+            else:
+                tick_interval = 300  # Fallback
+
+            ax.xaxis.set_major_locator(ticker.MultipleLocator(tick_interval))
+            ax.tick_params(axis='x', rotation=45)
+        
+        plt.savefig(os.path.join(OUTPUT_DIR, f"fitness_grid_mut{mut_prob}.png"), dpi=300, bbox_inches='tight')
+        plt.close(g.fig)
+
+        # --- Channel Probs Plots CI (Average) 2x2 Grid
+        for channel in ["Private", "Belief", "None"]:
+            g_ci = sns.relplot(
+                data=sub_mut_group,
+                kind="line",
+                x="Generation",
+                y=channel,
+                row="selection",
+                col="Dynamic_Switch",
+                hue="Environment",
+                style="Environment",
+                dashes=line_dashes,
+                errorbar=('ci', 95),
+                n_boot=30,
+                palette=channel_base_colors[channel],
+                height=6, aspect=2,
+                linewidth=2.5,
+                row_order=sel_order,
+                facet_kws={'margin_titles': True}
+            )
+            g_ci.set(ylim=(0, 1), xlim=(0, 3000))
+            g_ci.set_titles(row_template="{row_name}", col_template="{col_name}")
+            sns.move_legend(g_ci, "lower center", bbox_to_anchor=(0.5, -0.05), title="", ncol=3)
+
+            for ax in g_ci.axes.flat:
+                col_match = re.search(r'Dynamic_Switch\s*=\s*(\d+)', ax.get_title())
+                if col_match:
+                    dyn_sw_int = int(col_match.group(1))
+                    tick_interval = dyn_sw_int * 3 if dyn_sw_int == 100 else dyn_sw_int
+                else:
+                    tick_interval = 300
                 ax.xaxis.set_major_locator(ticker.MultipleLocator(tick_interval))
                 ax.tick_params(axis='x', rotation=45)
+                
+            plt.savefig(os.path.join(OUTPUT_DIR, f"channel_probs_ci_{channel}_grid_mut{mut_prob}.png"), dpi=300, bbox_inches='tight')
+            plt.close(g_ci.fig)
             
-            plt.savefig(os.path.join(OUTPUT_DIR, f"fitness_combined_sw{dyn_sw}_mut{mut_prob}.png"), dpi=300, bbox_inches='tight')
-            plt.close(g.fig)
+    # Process custom SD plots separately since they use standard deviations directly calculated over WandB global distributions
+    # We must melt differently to plot actual means with SD ranges
+    
+    plot_sd_df = []
+    for mut_prob, mut_group in df_hist.groupby("mutation_prob"):
+        dynamic_intervals = [sw for sw in mut_group["switch_interval"].unique() if isinstance(sw, (int, float)) or (isinstance(sw, str) and sw.isdigit())]
+        
+        for dyn_sw in dynamic_intervals:
+            target_intervals = [dyn_sw, "static-solitary", "static-collective"]
+            sub_hist_df = mut_group[mut_group["switch_interval"].isin(target_intervals)].copy()
+            
+            sub_hist_df["Environment"] = sub_hist_df["switch_interval"].apply(
+                lambda x: "dynamic" if str(x) == str(dyn_sw) else str(x)
+            )
+            sub_hist_df["Dynamic_Switch"] = dyn_sw
+            plot_sd_df.append(sub_hist_df)
+            
+    if plot_sd_df:
+        plot_sd_df = pd.concat(plot_sd_df)
+        
+        for mut_prob, sub_sd_mut_group in plot_sd_df.groupby("mutation_prob"):
+            for channel in ["Private", "Belief", "None"]:
+                
+                # To plot SD as an envelope using sns, we need upper/lower bounds.
+                # However sns.relplot directly doesn't allow parsing explicit upper/lower bounds elegantly.
+                # We will draw it manually on a FacetGrid
+                
+                g_sd = sns.FacetGrid(
+                    data=sub_sd_mut_group, 
+                    row="selection", 
+                    col="Dynamic_Switch",
+                    hue="Environment",
+                    palette=channel_base_colors[channel],
+                    height=6, aspect=2,
+                    row_order=sel_order,
+                    margin_titles=True
+                )
+                
+                # Define plotting function map
+                def plot_sd_envelope(data, **kwargs):
+                    ax = plt.gca()
+                    env = data['Environment'].iloc[0]
+                    color = channel_base_colors[channel][env]
+                    ls = line_dashes[env] if line_dashes[env] != "" else "solid"
+                    if ls != "solid":
+                        # Convert to loosely dashed tuple expected by plt.plot dashes arg if it's not a generic style string
+                        pass
+                    
+                    # Sort data
+                    data = data.sort_values(by="Generation")
+                    
+                    # Calculate mean across rows for the exact same generation
+                    # (since we collapsed all runs into separate distributions)
+                    g_data = data.groupby("Generation").agg({
+                        f"{channel}_Mean": "mean",
+                        f"{channel}_SD": "mean" 
+                    }).reset_index()
+                    
+                    gens = g_data["Generation"]
+                    means = g_data[f"{channel}_Mean"]
+                    sds = g_data[f"{channel}_SD"]
+                    
+                    if ls == "solid" or ls == "-":
+                        ax.plot(gens, means, color=color, linestyle="-", linewidth=2.5, label=env)
+                    else:
+                        ax.plot(gens, means, color=color, dashes=line_dashes[env], linewidth=2.5, label=env)
+                        
+                    ax.fill_between(gens, np.clip(means - sds, 0, 1), np.clip(means + sds, 0, 1), color=color, alpha=0.3)
+                
+                g_sd.map_dataframe(plot_sd_envelope)
+                g_sd.set(ylim=(0, 1), xlim=(0, 3000))
+                g_sd.set_titles(row_template="{row_name}", col_template="{col_name}")
+                g_sd.add_legend(title="")
+                sns.move_legend(g_sd, "lower center", bbox_to_anchor=(0.5, -0.05), title="", ncol=3)
+                
+                for ax in g_sd.axes.flat:
+                    col_match = re.search(r'Dynamic_Switch\s*=\s*(\d+)', ax.get_title())
+                    if col_match:
+                        dyn_sw_int = int(col_match.group(1))
+                        tick_interval = dyn_sw_int * 3 if dyn_sw_int == 100 else dyn_sw_int
+                    else:
+                        tick_interval = 300
+                    ax.xaxis.set_major_locator(ticker.MultipleLocator(tick_interval))
+                    ax.tick_params(axis='x', rotation=45)
+                    ax.set_ylabel(channel)
+                    ax.set_xlabel("Generation")
 
-            # Channel Probs Plots for the dynamic environment (split by selection)
-            for sel, sel_group in sub_df.groupby("selection"):
-                group_melted = sel_group.melt(
-                    id_vars=["Generation", "switch_interval"], 
-                    value_vars=["Private", "Belief", "None"],
-                    var_name="Channel",
-                    value_name="Probability"
-                )
-                
-                # CI Plot
-                plt.figure(figsize=(12, 6))
-                ax2 = sns.lineplot(
-                    data=group_melted,
-                    x="Generation",
-                    y="Probability",
-                    hue="Channel",
-                    style="switch_interval",
-                    errorbar=('ci', 95),
-                    n_boot=50,
-                    palette=["#009E73", "#56B4E9", "#E69F00"] # Distinct color palette for channels
-                )
-                plt.ylim(0, 1)
-                plt.xlim(0, 3000)
-                ax2.xaxis.set_major_locator(ticker.MultipleLocator(tick_interval))
-                plt.xticks(rotation=45)
-                
-                plt.title(f"Channel Probabilities CI ({sel}, Env Switch: {dyn_sw}, Mut Prob: {mut_prob})")
-                plt.tight_layout()
-                plt.savefig(os.path.join(OUTPUT_DIR, f"channel_probs_ci_{sel}_sw{dyn_sw}_mut{mut_prob}.png"), dpi=300)
-                plt.close()
-                
-                # SD Plot to highlight emergence of frequency-dependent strategies
-                # Show individual run variance directly instead of just CI bounding boxes
-                plt.figure(figsize=(12, 6))
-                ax3 = sns.lineplot(
-                    data=group_melted,
-                    x="Generation",
-                    y="Probability",
-                    hue="Channel",
-                    style="switch_interval",
-                    estimator='mean',
-                    errorbar='sd',
-                    err_kws={'alpha': 0.3}, # Highlight variance / strategy divergence 
-                    palette=["#009E73", "#56B4E9", "#E69F00"] 
-                )
-                plt.ylim(0, 1)
-                plt.xlim(0, 3000)
-                ax3.xaxis.set_major_locator(ticker.MultipleLocator(tick_interval))
-                plt.xticks(rotation=45)
-                
-                plt.title(f"Channel Probabilities SD ({sel}, Env Switch: {dyn_sw}, Mut Prob: {mut_prob})")
-                plt.tight_layout()
-                plt.savefig(os.path.join(OUTPUT_DIR, f"channel_probs_sd_{sel}_sw{dyn_sw}_mut{mut_prob}.png"), dpi=300)
-                plt.close()
+                plt.savefig(os.path.join(OUTPUT_DIR, f"channel_probs_global_sd_{channel}_grid_mut{mut_prob}.png"), dpi=300, bbox_inches='tight')
+                plt.close(g_sd.fig)
 
     print(f"Plots saved to {OUTPUT_DIR}")
 
@@ -263,23 +415,24 @@ def extract_prefix(fname):
     return m.group(1) if m else "global_"
 
 def download_gifs(run, sw_int, mut_prob, sel_name):
-    # The user wants GIFs between 1800 and 2400 generations.
+    gif_name = f"ternary_density_{sel_name}_sw{sw_int}_mut{mut_prob}_{run.id}.gif"
+    gif_path = os.path.join(OUTPUT_DIR, gif_name)
+    if os.path.exists(gif_path):
+        print(f"  {gif_path} exists, skipping GIF generation per user request.")
+        return
+
+    # Keep logic just in case the file doesn't exist
     print(f"  Downloading ternary density plots for GIF for {run.id} (between gens 1800-2400)...")
     files = list(run.files())
     ternary_files = [f for f in files if "ternary_density_top_k" in f.name and f.name.endswith(".png")]
     if not ternary_files:
-        print(f"  No ternary density files found for {run.id}.")
         return
 
-    # Filter to only the target generations: 1800 <= gen <= 2400
     filtered_files = [f for f in ternary_files if 1800 <= extract_gen(f.name) <= 2400]
-
-    # Force sort by generation correctly
     filtered_files.sort(key=lambda x: extract_gen(x.name))
     
     global_files = [f for f in filtered_files if extract_prefix(f.name) == "global_"]
     if len(global_files) < 2:
-        print(f"  Not enough global frames for GIF in required range for {run.id}.")
         return
         
     print(f"  Creating GIF for {run.id} with {len(global_files)} frames...")
@@ -291,37 +444,32 @@ def download_gifs(run, sw_int, mut_prob, sel_name):
             img = Image.open(file_path).convert("RGB")
             draw = ImageDraw.Draw(img)
             
-            # Fetch default font or load one. PIL default might be too small, but it works.
-            # Calculate Phase to find out if it's solitary or collective
             gen = extract_gen(f.name)
-            
             if isinstance(sw_int, int) or (isinstance(sw_int, str) and sw_int.isdigit()):
                 phase_idx = (gen // int(sw_int)) % 2
                 phase_text = "Solitary" if phase_idx == 0 else "Collective"
             else:
                 phase_text = "Static"
                 
-            # Draw text on image with a small bbox to ensure readability
             try:
-                # Add text to bottom right or top left
                 font = ImageFont.truetype("DejaVuSans-Bold.ttf", 48)
             except IOError:
                 font = ImageFont.load_default()
                 
-            # Outline/shadow for readability
-            text_pos = (20, 20)
-            draw.text((text_pos[0]-2, text_pos[1]-2), f"{phase_text} Phase (Gen {gen})", font=font, fill="white")
-            draw.text((text_pos[0]+2, text_pos[1]-2), f"{phase_text} Phase (Gen {gen})", font=font, fill="white")
-            draw.text((text_pos[0]-2, text_pos[1]+2), f"{phase_text} Phase (Gen {gen})", font=font, fill="white")
-            draw.text((text_pos[0]+2, text_pos[1]+2), f"{phase_text} Phase (Gen {gen})", font=font, fill="white")
-            draw.text(text_pos, f"{phase_text} Phase (Gen {gen})", font=font, fill="black")
+            # Place textual label upper-middle left, just Solitary/Collective
+            text_pos = (20, 150)
+            text_str = phase_text
+            draw.text((text_pos[0]-2, text_pos[1]-2), text_str, font=font, fill="black")
+            draw.text((text_pos[0]+2, text_pos[1]-2), text_str, font=font, fill="black")
+            draw.text((text_pos[0]-2, text_pos[1]+2), text_str, font=font, fill="black")
+            draw.text((text_pos[0]+2, text_pos[1]+2), text_str, font=font, fill="black")
+            draw.text(text_pos, text_str, font=font, fill="white")
             
             images.append(np.array(img))
             
     if images:
-        gif_name = f"ternary_density_{sel_name}_sw{sw_int}_mut{mut_prob}_{run.id}.gif"
-        gif_path = os.path.join(OUTPUT_DIR, gif_name)
-        imageio.mimsave(gif_path, images, fps=5)
+        # Loop GIFs loop=0 means infinite loop
+        imageio.mimsave(gif_path, images, fps=5, loop=0)
         print(f"  Saved GIF: {gif_path}")
 
 process_and_plot(runs)
