@@ -256,7 +256,7 @@ def process_and_plot(runs):
             ax.xaxis.set_major_locator(ticker.MultipleLocator(tick_interval))
             ax.tick_params(axis='x', rotation=45)
         
-        plt.savefig(os.path.join(OUTPUT_DIR, f"fitness_grid_mut{mut_prob}.png"), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(OUTPUT_DIR, f"fitness_grid_mut{mut_prob}.pdf"), dpi=300, bbox_inches='tight')
         plt.close(g.fig)
 
         # --- Channel Probs Plots CI (Average) 2x2 Grid
@@ -273,10 +273,10 @@ def process_and_plot(runs):
                 dashes=line_dashes,
                 errorbar=('ci', 95),
                 n_boot=30,
-                palette=channel_base_colors[channel],
                 height=6, aspect=2,
                 linewidth=2.5,
                 row_order=sel_order,
+                col_order=[100, 300],
                 facet_kws={'margin_titles': True}
             )
             g_ci.set(ylim=(0, 1), xlim=(0, 3000))
@@ -293,7 +293,7 @@ def process_and_plot(runs):
                 ax.xaxis.set_major_locator(ticker.MultipleLocator(tick_interval))
                 ax.tick_params(axis='x', rotation=45)
                 
-            plt.savefig(os.path.join(OUTPUT_DIR, f"channel_probs_ci_{channel}_grid_mut{mut_prob}.png"), dpi=300, bbox_inches='tight')
+            plt.savefig(os.path.join(OUTPUT_DIR, f"channel_probs_ci_{channel}_grid_mut{mut_prob}.pdf"), dpi=300, bbox_inches='tight')
             plt.close(g_ci.fig)
             
     # Process custom SD plots separately since they use standard deviations directly calculated over WandB global distributions
@@ -310,7 +310,7 @@ def process_and_plot(runs):
             sub_hist_df["Environment"] = sub_hist_df["switch_interval"].apply(
                 lambda x: "dynamic" if str(x) == str(dyn_sw) else str(x)
             )
-            sub_hist_df["Dynamic_Switch"] = dyn_sw
+            sub_hist_df["Dynamic_Switch"] = int(dyn_sw)
             plot_sd_df.append(sub_hist_df)
             
     if plot_sd_df:
@@ -331,6 +331,7 @@ def process_and_plot(runs):
                     palette=channel_base_colors[channel],
                     height=6, aspect=2,
                     row_order=sel_order,
+                    col_order=[100, 300],
                     margin_titles=True
                 )
                 
@@ -383,7 +384,7 @@ def process_and_plot(runs):
                     ax.set_ylabel(channel)
                     ax.set_xlabel("Generation")
 
-                plt.savefig(os.path.join(OUTPUT_DIR, f"channel_probs_global_sd_{channel}_grid_mut{mut_prob}.png"), dpi=300, bbox_inches='tight')
+                plt.savefig(os.path.join(OUTPUT_DIR, f"channel_probs_global_sd_{channel}_grid_mut{mut_prob}.pdf"), dpi=300, bbox_inches='tight')
                 plt.close(g_sd.fig)
 
     print(f"Plots saved to {OUTPUT_DIR}")

@@ -156,7 +156,7 @@ def process_adaptation():
             ax.xaxis.set_major_locator(ticker.MultipleLocator(tick_interval))
             ax.tick_params(axis='x', rotation=45)
             
-        plt.savefig(os.path.join(OUTPUT_DIR, f"adaptation_jsd_mut{mut_prob}.png"), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(OUTPUT_DIR, f"adaptation_jsd_mut{mut_prob}.pdf"), dpi=300, bbox_inches='tight')
         plt.close(g.fig)
 
     # 4. Quantify Adaptation Speed (Half-life and AUC)
@@ -289,7 +289,7 @@ def process_adaptation():
             sns.move_legend(g, "lower center", bbox_to_anchor=(0.5, -0.05), ncol=2, title="Transition")
             g.fig.subplots_adjust(wspace=0.05, hspace=0.1)
             
-            plt.savefig(os.path.join(OUTPUT_DIR, f"adaptation_catplot_{metric}.png"), dpi=300, bbox_inches='tight')
+            plt.savefig(os.path.join(OUTPUT_DIR, f"adaptation_catplot_{metric}.pdf"), dpi=300, bbox_inches='tight')
             plt.close(g.fig)
         
     print(f"\nSaved speed metrics to {OUTPUT_DIR}")
