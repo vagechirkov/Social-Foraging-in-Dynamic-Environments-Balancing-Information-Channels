@@ -211,7 +211,7 @@ def process_adaptation():
                 auc = 0.0
                 
             # Calculate Cumulative Regret (Adaptive Load)
-            regret = interval_data["Target_Fitness"].values - interval_data["Fitness"].values
+            regret = np.abs(interval_data["Target_Fitness"].values - interval_data["Fitness"].values)
             if len(interval_data) > 1:
                 cum_regret = simpson(y=regret, x=interval_data["Generation"].values)
             else:
@@ -257,14 +257,10 @@ def process_adaptation():
     transition_order = ["Solitary → Collective", "Collective → Solitary"]
     switch_order = ["100", "300"]
     
-    # Filter to only plot from the third switch (index 3) and onwards
-    plot_df = speed_df[speed_df["Switch_Index"] >= 3]
-    
     for metric in ["Half_Life", "AUC", "Cumulative_Regret"]:
-        sharey = False if metric == "Cumulative_Regret" else True
         with sns.plotting_context("paper", font_scale=1.2):
             g = sns.catplot(
-                data=plot_df,
+                data=speed_df,
                 kind="point",
                 x="switch_interval",
                 y=metric,
@@ -281,7 +277,6 @@ def process_adaptation():
                 capsize=0.1,
                 err_kws={'linewidth': 1.5},
                 margin_titles=True,
-                sharey=sharey,
                 dodge=True,
                 markers=["o", "s"],
                 join=False
