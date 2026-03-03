@@ -257,40 +257,43 @@ def process_adaptation():
     transition_order = ["Solitary → Collective", "Collective → Solitary"]
     switch_order = ["100", "300"]
     
-    for metric in ["Half_Life", "AUC", "Cumulative_Regret"]:
-        with sns.plotting_context("paper", font_scale=1.2):
-            g = sns.catplot(
-                data=speed_df,
-                kind="point",
-                x="switch_interval",
-                y=metric,
-                hue="Transition",
-                row="selection",
-                col="mutation_prob",
-                row_order=sel_order,
-                order=switch_order,
-                hue_order=transition_order,
-                palette="Set2",
-                height=4.0,
-                aspect=1.0,
-                errorbar=('ci', 95),
-                capsize=0.1,
-                err_kws={'linewidth': 1.5},
-                margin_titles=True,
-                dodge=True,
-                markers=["o", "s"],
-                join=False
-            )
-            
-            g.set_axis_labels("Switch Interval", metric.replace("_", " "))
-            g.set_titles(row_template="{row_name}", col_template="Mut Prob = {col_name}")
-            
-            # Adjust legend and layout
-            sns.move_legend(g, "lower center", bbox_to_anchor=(0.5, -0.05), ncol=2, title="Transition")
-            g.fig.subplots_adjust(wspace=0.05, hspace=0.1)
-            
-            plt.savefig(os.path.join(OUTPUT_DIR, f"adaptation_catplot_{metric}.pdf"), dpi=300, bbox_inches='tight')
-            plt.close(g.fig)
+    unique_mut_probs = speed_df["mutation_prob"].unique()
+    for mut_p in unique_mut_probs:
+        mut_speed_df = speed_df[speed_df["mutation_prob"] == mut_p]
+        
+        for metric in ["Half_Life", "AUC", "Cumulative_Regret"]:
+            with sns.plotting_context("paper", font_scale=1.2):
+                g = sns.catplot(
+                    data=mut_speed_df,
+                    kind="point",
+                    x="switch_interval",
+                    y=metric,
+                    hue="Transition",
+                    row="selection",
+                    row_order=sel_order,
+                    order=switch_order,
+                    hue_order=transition_order,
+                    palette="Set2",
+                    height=4.0,
+                    aspect=1.0,
+                    errorbar=('ci', 95),
+                    capsize=0.1,
+                    err_kws={'linewidth': 1.5},
+                    dodge=True,
+                    markers=["o", "s"],
+                    join=False
+                )
+                
+                y_label = "Fitness Cost" if metric == "Cumulative_Regret" else metric.replace("_", " ")
+                g.set_axis_labels("Switch Interval", y_label)
+                g.set_titles(row_template="{row_name}")
+                
+                # Adjust legend and layout
+                sns.move_legend(g, "lower center", bbox_to_anchor=(0.5, -0.05), ncol=2, title="Transition")
+                g.fig.subplots_adjust(hspace=0.2)
+                
+                plt.savefig(os.path.join(OUTPUT_DIR, f"adaptation_catplot_{metric}_mut{mut_p}.pdf"), dpi=300, bbox_inches='tight')
+                plt.close(g.fig)
         
     print(f"\nSaved speed metrics to {OUTPUT_DIR}")
 
