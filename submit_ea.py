@@ -14,6 +14,7 @@ def submit_ea_jobs():
     parser.add_argument("--selection", type=str, choices=["individual-global", "individual-local"], help="Selection method (individual-global or individual-local)")
     parser.add_argument("--multi_level_selection", type=str, choices=["true", "false", "True", "False"], help="Enable multi-level selection (true/false)")
     parser.add_argument("--mutation_prob", type=float, help="Mutation probability")
+    parser.add_argument("--n_agents", type=int, help="Number of agents")
     args = parser.parse_args()
 
     extra_args = []
@@ -29,6 +30,8 @@ def submit_ea_jobs():
         extra_args.append(f"evolution.multi_level_selection={args.multi_level_selection.lower()}")
     if args.mutation_prob is not None:
         extra_args.append(f"evolution.mutation_prob={args.mutation_prob}")
+    if args.n_agents is not None:
+        extra_args.append(f"n_agents={args.n_agents}")
 
     # Load the configuration
     config_path = "abm/ea_evaluation.yaml"
