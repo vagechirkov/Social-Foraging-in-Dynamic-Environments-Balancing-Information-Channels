@@ -377,7 +377,12 @@ def run_experiment(cfg: DictConfig):
 
         # 1. Evaluate
         with torch.inference_mode():
-            fitness_tensor = evaluator.evaluate(env, islands)
+            eval_result = evaluator.evaluate(env, islands, return_info=True)
+            if isinstance(eval_result, tuple):
+                fitness_tensor, extra_metrics = eval_result
+            else:
+                fitness_tensor = eval_result
+                extra_metrics = {}
             
         # Assign fitness back to individuals
         flat_population = [ind for island in islands for ind in island]
@@ -397,7 +402,7 @@ def run_experiment(cfg: DictConfig):
             is_snapshot = (gen_step % switch_interval == 0) or (gen_step == generations)
             
             # Global Logging
-            logger.log_metrics_ga(gen, fitness_tensor, env_steps_per_sec, islands, log_table=is_snapshot)
+            logger.log_metrics_ga(gen, fitness_tensor, env_steps_per_sec, islands, log_table=is_snapshot, extra_metrics=extra_metrics)
             if num_runs > 1:
                 for r in range(num_runs):
                     start_idx = r * run_size

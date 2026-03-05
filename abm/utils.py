@@ -205,7 +205,7 @@ class VmasEvaluator:
         else:
             return base_env
 
-    def evaluate(self, env, islands: List[List[Any]]) -> torch.Tensor:
+    def evaluate(self, env, islands: List[List[Any]], return_info: bool = False):
         # Prepare Genes
         flat_population = [ind for island in islands for ind in island]
         population_genes = torch.tensor(flat_population, dtype=torch.float32, device=self.device)
@@ -290,6 +290,20 @@ class VmasEvaluator:
         flat_rewards = total_rewards.cpu().numpy().flatten()
         for ind, reward in zip(flat_population, flat_rewards):
             ind.fitness.values = (float(reward),)
+
+        if return_info:
+            try:
+                belief_uncertainty = rollouts["next", "agents", "info", "belief_uncertainty"]
+                # Mean over all elements > 0 to exclude target agents (which are fixed to 0)
+                mask = belief_uncertainty > 0
+                if mask.any():
+                    avg_belief_uncertainty = belief_uncertainty[mask].mean().item()
+                else:
+                    avg_belief_uncertainty = 0.0
+                extra_metrics = {"avg_belief_uncertainty": avg_belief_uncertainty}
+            except KeyError:
+                extra_metrics = {}
+            return total_rewards, extra_metrics
 
         return total_rewards
 

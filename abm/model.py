@@ -198,12 +198,26 @@ class Scenario(BaseScenario):
 
 
     def info(self, agent: Agent) -> Dict[str, Tensor]:
-        info = {
-            "target_distance_reward": agent.target_distance_reward,
-            "target_reward": agent.target_reward,
-            "channel_costs_reward": agent.channel_costs_reward,
-            "collision_reward": agent.collision_reward
-        }
+        info = {}
+        if isinstance(agent, ForagingAgent):
+            info["target_distance_reward"] = agent.target_distance_reward
+            info["target_reward"] = agent.target_reward
+            info["channel_costs_reward"] = agent.channel_costs_reward
+            info["collision_reward"] = agent.collision_reward
+            
+            covs = getattr(agent, "belief_target_covariance", None)
+            if covs is not None:
+                det = (covs[..., 0, 0] * covs[..., 1, 1]) - (covs[..., 0, 1] * covs[..., 1, 0])
+                info["belief_uncertainty"] = det.mean(dim=-1)
+            else:
+                info["belief_uncertainty"] = torch.zeros(agent.batch_dim, device=agent.device)
+        else:
+            z = torch.zeros(agent.batch_dim, device=agent.device)
+            info["target_distance_reward"] = z
+            info["target_reward"] = z
+            info["channel_costs_reward"] = z
+            info["collision_reward"] = z
+            info["belief_uncertainty"] = z
         return info
 
     def observation(self, agent: Agent):
