@@ -48,22 +48,37 @@ def submit_ea_jobs():
     print(f"Found categories: {categories}")
     print(f"Using submit script: {sbatch_script}")
 
-    # 1. Dynamic Environment Pipeline (Pairwise)
-    print("\n--- Submitting Dynamic Environment Pipeline (Pairwise) ---")
+    # 1. Dynamic Environment Pipeline
+    print("\n--- Submitting Dynamic Environment Pipeline ---")
     
-    # Generate all pairs of environments
-    # pairs = [("solitary", "collective")]
-    pairs = list(itertools.combinations(categories, 2))
+    # Generate diverse sequence patterns
+    schedules = []
     
-    for pair in pairs:
-        pair_str = f"{pair[0]}-{pair[1]}"
-        print(f"Processing pair: {pair_str}")
+    # 1. Pairs (A-B)
+    for pair in itertools.combinations(categories, 2):
+        schedules.append(f"{pair[0]}-{pair[1]}")
+        
+    if len(categories) >= 3:
+        # 2. Triplets
+        schedules.append(f"{categories[0]}-{categories[1]}-{categories[2]}")
+        schedules.append(f"{categories[1]}-{categories[2]}-{categories[0]}")
+        
+        # 3. Alternating complex pattern (e1 -> e2 -> e1 -> e3)
+        schedules.append(f"{categories[0]}-{categories[1]}-{categories[0]}-{categories[2]}")
+        schedules.append(f"{categories[1]}-{categories[0]}-{categories[1]}-{categories[2]}")
+        schedules.append(f"{categories[2]}-{categories[1]}-{categories[2]}-{categories[0]}")
+    
+    # 4. Random orders
+    schedules.extend(["random", "random", "random"])
+    
+    for schedule in schedules:
+        print(f"Processing schedule: {schedule}")
         
         # Command arguments for ea_cpu_hpc_itb.sh / ea_gpu_hpc_scioi.sh
         # $1: mode (dynamic)
-        # $2: category (pair_str)
+        # $2: category (schedule)
         
-        cmd = ["sbatch", sbatch_script, "dynamic", pair_str] + extra_args
+        cmd = ["sbatch", sbatch_script, "dynamic", schedule] + extra_args
         
         if args.dry_run:
             print(f"  Command: {' '.join(cmd)}")

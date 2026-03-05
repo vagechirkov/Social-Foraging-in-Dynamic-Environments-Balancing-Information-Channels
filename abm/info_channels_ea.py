@@ -247,16 +247,28 @@ def run_experiment(cfg: DictConfig):
     env_keys = sorted(list(cfg.environments.categories.keys()))
     print(f"Loaded Environment Categories: {env_keys}")
     
-    # If dynamic mode and static_category implies a pair (e.g. "solitary-collective")
-    if cfg.environment.mode == "dynamic" and "-" in cfg.environment.static_category:
-        pair_keys = cfg.environment.static_category.split("-")
-        # Validate keys
-        valid_keys = [k for k in pair_keys if k in cfg.environments.categories]
-        if len(valid_keys) == 2:
-            print(f"Dynamic Mode: Oscillating between pair {valid_keys}")
-            env_keys = valid_keys
+    environment_sequence = "default"
+    if cfg.environment.mode == "dynamic":
+        if cfg.environment.static_category == "random":
+            # Generate a random sequence big enough to cover the max number of switches
+            num_switches = (generations // switch_interval) + 2
+            # Use all available environments for random sequences
+            available_envs = list(cfg.environments.categories.keys())
+            env_keys = [random.choice(available_envs) for _ in range(num_switches)]
+            environment_sequence = "random"
+            print(f"Dynamic Mode: Using random environment sequence")
+        elif "-" in cfg.environment.static_category:
+            seq_keys = cfg.environment.static_category.split("-")
+            valid_keys = [k for k in seq_keys if k in cfg.environments.categories]
+            if len(valid_keys) == len(seq_keys):
+                print(f"Dynamic Mode: Oscillating between sequence {valid_keys}")
+                env_keys = valid_keys
+                environment_sequence = "-".join(valid_keys)
+            else:
+                 print(f"Warning: Invalid sequence specified {cfg.environment.static_category}. Fallback to full cycle.")
+                 environment_sequence = "-".join(env_keys)
         else:
-             print(f"Warning: Invalid pair specified {cfg.environment.static_category}. Fallback to full cycle.")
+             environment_sequence = "-".join(env_keys)
     
     def apply_env_category(target_cfg, category_name):
         """Applies parameters from a category to the config."""
@@ -273,9 +285,13 @@ def run_experiment(cfg: DictConfig):
         
     # Init Logger
     work_cfg.project_name = cfg.project_name
-    
-    if cfg.environment.mode == "dynamic" and "-" in cfg.environment.static_category:
-         work_cfg.run_name = f"{cfg.environment.mode}_{cfg.environment.static_category}_{cfg.run_name}"
+    if cfg.environment.mode == "dynamic":
+        if cfg.environment.static_category == "random":
+            work_cfg.run_name = f"{cfg.environment.mode}_random_{cfg.run_name}"
+        elif "-" in cfg.environment.static_category:
+            work_cfg.run_name = f"{cfg.environment.mode}_{cfg.environment.static_category}_{cfg.run_name}"
+        else:
+            work_cfg.run_name = f"{cfg.environment.mode}_{cfg.run_name}"
     else:
          work_cfg.run_name = f"{cfg.environment.mode}_{cfg.run_name}"
     
@@ -317,7 +333,9 @@ def run_experiment(cfg: DictConfig):
             "sigma": cfg.evolution.sigma,
             "indpb": cfg.evolution.indpb,
             "selection": cfg.evolution.get("selection", "individual-local"),
-            "multi_level_selection": cfg.evolution.get("multi_level_selection", False)
+            "multi_level_selection": cfg.evolution.get("multi_level_selection", False),
+            "environment_sequence": environment_sequence,
+            "actual_random_sequence": "-".join(env_keys) if cfg.environment.mode == "dynamic" and cfg.environment.static_category == "random" else None
         })
 
     # Initialize Population
@@ -368,7 +386,7 @@ def run_experiment(cfg: DictConfig):
                 del env
                 evaluator = VmasEvaluator(work_cfg, device)
                 env = evaluator.init_env(env_transform=GenePersistenceTransform)
-                print(f"--> Environment re-initialized for {new_category}")
+                print(f"--> Gen {gen}: Environment re-initialized for {new_category}")
                 
             if work_cfg.use_wandb:
                 wandb.log({"env_category_idx": stage_idx, "env_category": current_env_category}, step=gen)

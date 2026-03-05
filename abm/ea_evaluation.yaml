@@ -42,12 +42,12 @@ environments:
       spot_radius: 0.25
       dist_noise_scale_priv: 0.05
     
-    # info_constrained:
-    #   target_speed: 0.3
-    #   cost_priv: 0.08
-    #   cost_belief: 0.08
-    #   spot_radius: 1.0
-    #   dist_noise_scale_priv: 0.05
+    info_constrained:
+      target_speed: 0.3
+      cost_priv: 0.08
+      cost_belief: 0.08
+      spot_radius: 1.0
+      dist_noise_scale_priv: 0.05
 
 
 # Genetic Algorithm / Exploration Settings
