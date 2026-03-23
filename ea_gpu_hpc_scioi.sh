@@ -5,12 +5,13 @@
 #SBATCH --error=job_%j.log                          # Error log file
 #SBATCH --ntasks=1                                  # Number of tasks
 #SBATCH --partition=gpu,ex_scioi_gpu,scioi_gpu,ex_scioi_a100nv # Partition to submit to
+#SBATCH --qos=ex_scioi                              # Use ex_scioi Quality of Service (QoS)
 #SBATCH --gres=gpu:1                                # Request 1 GPU
 #SBATCH --cpus-per-task=10                          # Number of CPUs
 #SBATCH --time=3-00:00:00                           # Maximum runtime (hh:mm:ss)
 #SBATCH --mem=128G                                   # Memory allocation
 
-module load nvidia/cuda/12.1
+module load cuda/12.8
 
 # assuming that current direction is Social-Foraging-in-Dynamic-Environments-Balancing-Information-Channels
 # echo "Current working directory: $(pwd)"
@@ -19,10 +20,10 @@ module load nvidia/cuda/12.1
 export PYTHONPATH=$PYTHONPATH:.
 
 source ~/.bashrc
-source .venv2/bin/activate
+source .venv/bin/activate
 
-# echo "uv sync --extra cu121..."
-# uv sync --extra cu121 --verbose
+# echo "uv sync --extra cu124..."
+# uv sync --extra cu124 --verbose
 
 mode=$1
 category=$2

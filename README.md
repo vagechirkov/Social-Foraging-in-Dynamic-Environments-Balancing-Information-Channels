@@ -5,7 +5,7 @@
 uv sync
 
 # for gpu installation
-uv sync --extra cu121
+uv sync --extra cu124
 
 # for cpu installation
 # uv sync --extra cpu
@@ -78,12 +78,12 @@ uv run python submit_ea.py --replicates 50 --generations 2000 --switch_interval 
 **GPU Execution**
 To dispatch the evolutionary algorithm to the GPU nodes (e.g. `ex_scioi_gpu`), append the `--gpu` flag:
 ```bash
-uv run --extra cu121 python submit_ea.py --gpu --dry-run
-uv run --extra cu121 python submit_ea.py --gpu --replicates 2000 --generations 3000 --switch_interval 300 --selection individual-local --multi_level_selection True --mutation_prob 0.1
-uv run --extra cu121 python submit_ea.py --gpu --replicates 2000 --generations 3000 --switch_interval 300 --selection individual-global --multi_level_selection False --mutation_prob 0.1
+uv run --extra cu124 python submit_ea.py --gpu --dry-run
+uv run --extra cu124 python submit_ea.py --gpu --replicates 2000 --generations 3000 --switch_interval 300 --selection individual-local --multi_level_selection True --mutation_prob 0.1
+uv run --extra cu124 python submit_ea.py --gpu --replicates 2000 --generations 3000 --switch_interval 300 --selection individual-global --multi_level_selection False --mutation_prob 0.1
 
-uv run --extra cu121 python submit_ea.py --gpu --replicates 2000 --generations 3000 --switch_interval 100 --selection individual-local --multi_level_selection True --mutation_prob 0.1
-uv run --extra cu121 python submit_ea.py --gpu --replicates 2000 --generations 3000 --switch_interval 100 --selection individual-global --multi_level_selection False --mutation_prob 0.1
+uv run --extra cu124 python submit_ea.py --gpu --replicates 2000 --generations 3000 --switch_interval 100 --selection individual-local --multi_level_selection True --mutation_prob 0.1
+uv run --extra cu124 python submit_ea.py --gpu --replicates 2000 --generations 3000 --switch_interval 100 --selection individual-global --multi_level_selection False --mutation_prob 0.1
 ```
 
 This script submits:
@@ -93,6 +93,11 @@ This script submits:
 To check GPU usage:
 ```bash
 srun --jobid=123456 nvidia-smi
+```
+
+Check the number of running and pending jobs:
+```bash
+echo "Pending: $(squeue -u valerii -t PD -h | wc -l) | Running: $(squeue -u valerii -t R -h | wc -l) | Total: $(squeue -u valerii -h | wc -l)"
 ```
 
 ## Run 3 channels parameter sweep
