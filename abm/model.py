@@ -48,7 +48,9 @@ class Scenario(BaseScenario):
         self.n_targets = None
         self.target_speed = None
         self.targets_quality_type = None
+        self.target_quality = None
         self.target_qualities = None
+        self.target_speeds = None
         self.target_persistence = None
         self.target_movement_pattern = None
         self.relocation_interval = None
@@ -100,11 +102,21 @@ class Scenario(BaseScenario):
             "spot_radius": kwargs.pop("spot_radius", 0.5),
         }
 
-        self.targets_quality_type = kwargs.pop("targets_quality", "HM")
-        if self.targets_quality_type == "HM":
-            self.target_qualities = [1.0 for _ in range(self.n_targets)]
-        elif self.targets_quality_type == "HT":
-            self.target_qualities = np.linspace(0.5, 1.5, self.n_targets).tolist()
+        targets_quality = kwargs.pop("targets_quality", "HM")
+        self.targets_quality_type = targets_quality
+        self.target_qualities = kwargs.pop("target_qualities", None)
+        self.target_speeds = kwargs.pop("target_speeds", None)
+
+        if targets_quality == "HM":
+            if self.target_qualities is None:
+                self.target_qualities = [1.0 for _ in range(self.n_targets)]
+            if self.target_speeds is None:
+                self.target_speeds = [self.target_speed for _ in range(self.n_targets)]
+        elif targets_quality == "HT":
+            if self.target_qualities is None:
+                self.target_qualities = np.linspace(0.5, 1.5, self.n_targets).tolist()
+            if self.target_speeds is None:
+                self.target_speeds = [self.target_speed for _ in range(self.n_targets)]
         else:
             raise ValueError
 
@@ -151,7 +163,7 @@ class Scenario(BaseScenario):
                 shape=Sphere(radius=self.agent_radius * self.target_qualities[i] * 4),
                 color=Color.GRAY,
                 render_action=True,
-                max_speed=self.max_speed * self.target_speed,
+                max_speed=self.max_speed * self.target_speeds[i],
                 action_script=self.action_script_creator(),
                 action_size=self.action_size,
                 batch_dim=batch_dim,
@@ -241,7 +253,7 @@ class Scenario(BaseScenario):
             other_agents = [a for a in self.foraging_agents if a != agent]
 
             observe(agent, targets, other_agents)
-            add_process_noise_to_belief(agent, self.target_speed)
+            add_process_noise_to_belief(agent, self.target_speeds)
             update_belief(agent)
             compute_gradient(agent)
             compute_reward(agent, targets)

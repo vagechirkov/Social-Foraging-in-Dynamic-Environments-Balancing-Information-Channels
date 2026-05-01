@@ -908,6 +908,12 @@ def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: Li
 
 def add_process_noise_to_belief(agent: ForagingAgent, target_speed):
     # This prevents the covariance from collapsing to zero and allows tracking moving targets
+    if isinstance(target_speed, (list, tuple)):
+        target_speed = torch.tensor(target_speed, device=agent.device)
+
+    if isinstance(target_speed, torch.Tensor):
+        target_speed = target_speed.view(1, -1, 1, 1)
+
     Q_scale = agent.process_noise_scale * (target_speed / 0.1)
     Q = torch.eye(2, device=agent.device).view(1, 1, 2, 2).expand_as(agent.belief_target_covariance) * (Q_scale ** 2)
 
