@@ -9,7 +9,7 @@ import os
 consensus_selectivity_array = [1.0]
 
 # Belief Parameters
-belief_selectivity_array = [0.5, 1.0]
+belief_selectivity_array = [0.25]
 gamma_belief_array = [0.01]  # Options: 0.1 1 10
 
 # Channel Mode
@@ -17,18 +17,19 @@ channel_y_name = "Belief"
 
 # Agent & Environment Dimensions
 dim_array = [2]  # Options: 5 10 15
-n_agent_array = [15]  # Options: 20 30
+n_agent_array = [15, 30]  # Options: 20 30
 
 # Target
-n_targets_array = [1]
-target_speed_array = [0.1, 0.5, 0.9]  # Options: 0.1 0.3 0.5
-target_persistence_array = [25]
-relocation_interval_array = [1000, 2500]
+n_targets_array = [2]
+target_qualities_array = ["'[1.0, 0.2]'"]
+target_speed_array = [0.3, 0.5, 0.7]  # Options: 0.1 0.3 0.5
+target_persistence_array = [20]
+relocation_interval_array = [1000]
 
 # Costs
-cost_priv_array = [0.3]  # Options: 0.5 0.1 0.02
+cost_priv_array = [0.05]  # Options: 0.5 0.1 0.02
 cost_belief_array = [0.05]  # Options: 0.01 0.05 0.5 0.1 0.02
-cost_consensus_array = [0.01]
+cost_consensus_array = [0.0]
 
 # Noise
 base_noise_array = [0.1]
@@ -37,7 +38,7 @@ process_noise_scale_array = [0.05]  # 0.1 0.5 1.0
 process_noise_scale_het_ratio_array = [0]  # 0.5 0.2 0.8
 process_noise_scale_het_scale_array = [10]  # 100
 bias_magnitude_array = [0.0]
-spot_radius_array = [0.5]
+spot_radius_array = [0.25, 0.5, 0.75, 1.0]
 
 def submit_jobs(dry_run=False):
     # Create all combinations
@@ -66,7 +67,8 @@ def submit_jobs(dry_run=False):
         cost_consensus_array,
         consensus_selectivity_array,
         bias_magnitude_array,
-        spot_radius_array
+        spot_radius_array,
+        target_qualities_array
     )
 
     count = 0
@@ -89,7 +91,8 @@ def submit_jobs(dry_run=False):
         cost_consensus,
         consensus_selectivity,
         bias_magnitude,
-        spot_radius
+        spot_radius,
+        target_qualities
     ) in combinations:
         
         count += 1
@@ -114,6 +117,9 @@ def submit_jobs(dry_run=False):
         # 17. consensus_selectivity_threshold
         # 18. channel_y_name
         # 19. bias_magnitude
+        # 20. spot_radius
+        # 21. category_name
+        # 22. target_qualities
 
         args = [
             str(t_speed),
@@ -135,7 +141,9 @@ def submit_jobs(dry_run=False):
             str(consensus_selectivity),
             str(channel_y_name),
             str(bias_magnitude),
-            str(spot_radius)
+            str(spot_radius),
+            "heterogeneous",
+            str(target_qualities)
         ]
         
         cmd = ["sbatch", "3_channel_cpu_hpc_itb.sh"] + args

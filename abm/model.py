@@ -107,6 +107,13 @@ class Scenario(BaseScenario):
         self.target_qualities = kwargs.pop("target_qualities", None)
         self.target_speeds = kwargs.pop("target_speeds", None)
 
+        if isinstance(self.target_qualities, str):
+            import ast
+            self.target_qualities = ast.literal_eval(self.target_qualities)
+        if isinstance(self.target_speeds, str):
+            import ast
+            self.target_speeds = ast.literal_eval(self.target_speeds)
+
         if targets_quality == "HM":
             if self.target_qualities is None:
                 self.target_qualities = [1.0 for _ in range(self.n_targets)]

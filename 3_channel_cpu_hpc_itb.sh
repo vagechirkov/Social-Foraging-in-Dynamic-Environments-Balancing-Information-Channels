@@ -36,6 +36,7 @@ channel_y_name=${18}
 bias_magnitude=${19}
 spot_radius=${20}
 category_name=${21}
+target_qualities=${22}
 
 python abm/3_channels_abm_exploration.py \
     --m n_agents="$n_agents" \
@@ -62,4 +63,5 @@ python abm/3_channels_abm_exploration.py \
     consensus_selectivity_threshold="$consensus_selectivity_threshold" \
     channel_y_name="$channel_y_name" \
     bias_magnitude="$bias_magnitude" \
-    spot_radius="$spot_radius"
+    spot_radius="$spot_radius" \
+    +target_qualities="$target_qualities"
