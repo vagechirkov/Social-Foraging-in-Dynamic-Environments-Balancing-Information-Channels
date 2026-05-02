@@ -70,6 +70,9 @@ class ForagingAgent(Agent):
             cost_pos: float = 0.1,
             cost_consensus: float = 0.5,
             spot_radius: float = 0.5,
+            decision_making: str = "sum",  # "sum", "greedy", or "thompson"
+            x_dim: float = 1.0,
+            y_dim: float = 1.0,
             *args,
             **kwargs,
     ):
@@ -93,6 +96,7 @@ class ForagingAgent(Agent):
         self.consensus_selectivity_threshold = consensus_selectivity_threshold
         self.social_info_aggregation = social_info_aggregation
         self.max_belief_uncertainty = max_belief_uncertainty
+        self.decision_making = decision_making
 
         # 3. Energy Costs Vector [Priv, Belief, Heading, Pos, None, Consensus]
         # Used for reward calculation/energy expenditure tracking
@@ -134,7 +138,12 @@ class ForagingAgent(Agent):
 
         # BELIEF STATE
         # Means mu_{i,k}: (batch, n_targets, 2)
-        self.belief_target_pos = torch.zeros(batch_dim, n_targets, 2, device=device)
+        # Random Initialization within environment bounds
+        self.belief_target_pos = torch.cat([
+            torch.empty(batch_dim, n_targets, 1, device=device).uniform_(-x_dim, x_dim),
+            torch.empty(batch_dim, n_targets, 1, device=device).uniform_(-y_dim, y_dim)
+        ], dim=2)
+        
         # Covariances Sigma_{i,k}: (batch, n_targets, 2, 2)
         # Initialize with identity matrices to represent initial uncertainty
         self.belief_target_covariance = torch.eye(2, device=device).reshape(1, 1, 2, 2).repeat(batch_dim, n_targets, 1, 1)
@@ -292,20 +301,16 @@ class AgentObservations:
         is_hit = dist_err < spot_radius
         
         # --- 4. Construct Observations (Gated Noise) ---
-        TINY_VAR = 1e-2  # High confidence at distance 0
+        TINY_VAR = 1e-2  # High confidence
+        HUGE_VAR = 1e4   # Low confidence
         
-        # Initialize output containers (zeros are fine since mask handles selection)
+        # Initialize output containers
         out_pos = torch.zeros(batch_dim, agent.n_targets, 2, device=device)
         out_cov = torch.zeros(batch_dim, agent.n_targets, 2, 2, device=device)
         out_q = torch.zeros(batch_dim, agent.n_targets, device=device)
         out_q_var = torch.zeros(batch_dim, agent.n_targets, device=device)
 
-        # HIT CASE:
-        # Pos: True Position
-        # Qual: True Quality
-        # Var: Attenuated by distance
-        
-        # Calculate distance for attenuation
+        # Calculate distance for hit scaling
         agent_pos = agent.state.pos[indices]
         dist_to_target = torch.norm(agent_pos - true_pos_k, dim=1) # (batch,)
         
@@ -314,32 +319,35 @@ class AgentObservations:
         # We start with sqrt(TINY_VAR) to ensure base precision is high
         sigma_spot = torch.sqrt(torch.tensor(TINY_VAR, device=device)) + agent.dist_noise_scale_priv * dist_to_target
         var_spot = sigma_spot ** 2
+
+        # Construction logic per batch element
+        # We'll use torch.where to handle hit vs miss
+        is_hit_expanded = is_hit.unsqueeze(-1) # (batch, 1)
         
-        # MISS CASE:
-        # Handled by mask=False -> No Update
+        # Quality: If hit -> true_qual, If miss -> 0
+        obs_q = torch.where(is_hit, true_qual_k, torch.zeros_like(true_qual_k))
+        # Quality Var: Always use var_spot (we are sure about what we saw/didn't see)
+        var_q = var_spot
         
-        # Data for selected k (Assume Hit values, Mask filters Misses)
-        obs_p = true_pos_k 
-        var_p = var_spot.expand(batch_dim)
-        
-        obs_q = true_qual_k
-        var_q = var_spot.expand(batch_dim)
+        # Position: If hit -> true_pos, If miss -> look_pos (but with huge variance)
+        obs_p = torch.where(is_hit_expanded, true_pos_k, look_pos)
+        # Position Var: If hit -> var_spot, If miss -> HUGE_VAR
+        var_p = torch.where(is_hit, var_spot, torch.tensor(HUGE_VAR, device=device))
         
         # Scatter into full tensors
         out_pos.scatter_(1, selected_k_idx.unsqueeze(-1).expand(-1, 1, 2), obs_p.unsqueeze(1))
         
         cov_eye = torch.eye(2, device=device).unsqueeze(0).expand(batch_dim, -1, -1)
-        cov_k = cov_eye * var_p.unsqueeze(-1).unsqueeze(-1)
+        cov_k = cov_eye * var_p.view(batch_dim, 1, 1)
         out_cov.scatter_(1, selected_k_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, 1, 2, 2), cov_k.unsqueeze(1))
         
         out_q.scatter_(1, selected_k_idx, obs_q.unsqueeze(1))
         out_q_var.scatter_(1, selected_k_idx, var_q.unsqueeze(1))
 
+        # IMPORTANT: Now we ALWAYS update the mask for the selected target
+        # even if it was a miss (to provide negative evidence).
         mask = torch.zeros(batch_dim, agent.n_targets, device=device, dtype=torch.bool)
-        # Only update if IT IS A HIT
-        # If Miss -> Mask remains False -> No Update
-        hit_mask = is_hit.unsqueeze(1) # (batch, 1)
-        mask.scatter_(1, selected_k_idx, hit_mask)
+        mask.scatter_(1, selected_k_idx, True)
         agent.obs_target_mask[indices] = mask
 
         return out_pos, out_cov, out_q, out_q_var
@@ -372,6 +380,9 @@ class AgentObservations:
         # Stack all neighbors' quality estimates: (batch, n_neighbors, n_targets)
         all_neighbors_belief_qual = torch.stack([a.belief_target_qual[indices] for a in other_agents], dim=1)
 
+        # Stack all neighbors' quality variances: (batch, n_neighbors, n_targets)
+        all_neighbors_belief_qual_var = torch.stack([a.belief_target_qual_var[indices] for a in other_agents], dim=1)
+
         # 2. Select the specific neighbor j using other_agent_mask
         # mask is (batch,), need to slice it by indices first
         batch_mask = other_agent_mask[indices] # (batch_subset,)
@@ -392,6 +403,10 @@ class AgentObservations:
         # For belief qual: (batch, 1, n_targets)
         idx_belief_qual = batch_mask.view(batch_dim, 1, 1).expand(-1, 1, n_targets)
         neighbor_belief_qual = torch.gather(all_neighbors_belief_qual, 1, idx_belief_qual).squeeze(1)
+
+        # For belief qual var: (batch, 1, n_targets)
+        idx_belief_qual_var = batch_mask.view(batch_dim, 1, 1).expand(-1, 1, n_targets)
+        neighbor_belief_qual_var = torch.gather(all_neighbors_belief_qual_var, 1, idx_belief_qual_var).squeeze(1)
 
         # 3. Calculate Transmission Noise based on distance d_ij
         # agent.state.pos[indices]: (batch, 2)
@@ -474,8 +489,8 @@ class AgentObservations:
         qual_noise = torch.randn(batch_dim, n_targets, device=device) * sigma_trans.unsqueeze(1)
         target_qual = neighbor_belief_qual + qual_noise
 
-        # Quality Variance R_q
-        target_qual_var = var_trans.unsqueeze(1).expand(-1, n_targets)
+        # Quality Variance R_q = Sigma_j_q + var_trans
+        target_qual_var = neighbor_belief_qual_var + var_trans.unsqueeze(1).expand(-1, n_targets)
 
         agent.obs_target_mask[indices] = True
         return target_pos, target_covariance, target_qual, target_qual_var
@@ -941,7 +956,7 @@ def add_process_noise_to_belief(agent: ForagingAgent, target_speed):
     agent.belief_target_covariance.masked_scatter_(mask, clamped_diag)
 
     # Also add process noise to quality variance (assuming quality might drift slightly)
-    # agent.belief_target_qual_var = agent.belief_target_qual_var + (Q_scale ** 2)
+    agent.belief_target_qual_var = agent.belief_target_qual_var + (Q_scale.squeeze(-1).squeeze(-1) ** 2)
 
     # Add a tiny epsilon to the diagonal to prevent singularity
     epsilon = 1e-6
@@ -1074,16 +1089,32 @@ def compute_gradient(agent: ForagingAgent):
     log_q = torch.log(torch.clamp(q, min=1e-10))
     log_weights = log_q + log_prob # (batch, n_targets)
 
-    # 7. Log-Sum-Exp Trick (Vectorized)
-    # Find max over targets dim
-    max_log_weights, _ = torch.max(log_weights, dim=1, keepdim=True)
-
-    # Exponentials
-    stable_coeffs = torch.exp(log_weights - max_log_weights) # (batch, n_targets)
-
-    # Weighted Sum of Gradient Vectors
-    # (batch, n_targets, 1) * (batch, n_targets, 2) -> sum over n_targets
-    total_grad_direction = (stable_coeffs.unsqueeze(-1) * grad_vectors).sum(dim=1)
+    # 7. Decision Making
+    if agent.decision_making == "sum":
+        # Log-Sum-Exp Trick (Vectorized)
+        # Find max over targets dim
+        max_log_weights, _ = torch.max(log_weights, dim=1, keepdim=True)
+        # Exponentials
+        stable_coeffs = torch.exp(log_weights - max_log_weights) # (batch, n_targets)
+        # Weighted Sum of Gradient Vectors
+        # (batch, n_targets, 1) * (batch, n_targets, 2) -> sum over n_targets
+        total_grad_direction = (stable_coeffs.unsqueeze(-1) * grad_vectors).sum(dim=1)
+    elif agent.decision_making == "greedy":
+        # Pick the target with the highest weight (Log-Sum-Exp terms)
+        # weight_k = log(q_k) + log(p(x|theta_k))
+        best_target_idx = torch.argmax(log_weights, dim=1) # (batch,)
+        # Gather the gradient for the best target
+        total_grad_direction = torch.gather(grad_vectors, 1, best_target_idx.view(batch_dim, 1, 1).expand(-1, 1, 2)).squeeze(1)
+    elif agent.decision_making == "thompson":
+        # Sample one target based on the weights
+        # We need normalized weights (probabilities)
+        probs = torch.softmax(log_weights, dim=1) # (batch, n_targets)
+        # Sample one index per batch
+        sampled_idx = torch.multinomial(probs, 1) # (batch, 1)
+        # Gather the gradient
+        total_grad_direction = torch.gather(grad_vectors, 1, sampled_idx.unsqueeze(-1).expand(-1, 1, 2)).squeeze(1)
+    else:
+        raise ValueError(f"Unknown decision_making mode: {agent.decision_making}")
 
     # 8. Normalize and Update
     grad_norm = torch.norm(total_grad_direction, dim=1, keepdim=True)

@@ -54,6 +54,8 @@ if target_pattern == "levy":
     t_speed = st.sidebar.slider("Target Speed", 0.01, 2.0, 0.5)
 
 
+decision_making = st.sidebar.selectbox("Decision Making", ["sum", "greedy", "thompson"], index=1)
+
 # fps = st.sidebar.slider("FPS Limit", 1, 260, 100)
 fps = 100
 plot_size = st.sidebar.slider("Plot Size", 6, 20, 12)
@@ -74,7 +76,7 @@ def reset_simulation():
         'n_targets': n_targets, 
         'target_quality': 'HT',
         # 'target_speeds': [0.3, 0.5],
-        'target_qualities': [0.2, 1.0],
+        'target_qualities': [0.05, 1.0],
         'is_interactive': False, 
         'initialization_box_ratio': 1.0,
         'visualize_semidims': True, 
@@ -97,8 +99,9 @@ def reset_simulation():
         'process_noise_scale_het_ratio': 0, 
         'process_noise_scale_het_scale': 10,
         'bias_magnitude': 0,
+        'decision_making': decision_making,
+        'spot_radius': spot_radius,
         'channel_y_name': "Belief",
-        'spot_radius': spot_radius
     }
     env = VmasEnv(scenario=Scenario(), num_envs=1, device="cpu", **params)
     env.reset()
