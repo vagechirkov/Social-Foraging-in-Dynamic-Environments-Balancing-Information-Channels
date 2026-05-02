@@ -64,4 +64,5 @@ python abm/3_channels_abm_exploration.py \
     channel_y_name="$channel_y_name" \
     bias_magnitude="$bias_magnitude" \
     spot_radius="$spot_radius" \
-    +target_qualities="$target_qualities"
+    +target_qualities="$target_qualities" \
+    +decision_making="greedy"

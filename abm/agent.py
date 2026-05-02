@@ -70,7 +70,7 @@ class ForagingAgent(Agent):
             cost_pos: float = 0.1,
             cost_consensus: float = 0.5,
             spot_radius: float = 0.5,
-            decision_making: str = "sum",  # "sum", "greedy", or "thompson"
+            decision_making: str = "sum",  # "sum", "greedy", "thompson", or "strongest"
             x_dim: float = 1.0,
             y_dim: float = 1.0,
             *args,
@@ -265,110 +265,80 @@ class AgentObservations:
     @staticmethod
     def private_spotlight(agent, targets, indices=None, spot_radius: float = 0.5):
         """
-        Active 'Spotlight' Sensing using Thompson Sampling.
-        1. Selects WHERE to look based on current belief uncertainty/quality.
-        2. If 'Miss': Updates Quality -> 0, Position -> No Update.
-        3. If 'Hit': Updates both with high precision.
+        Active 'Spotlight' Sensing using Independent Sampling for each target.
+        1. Generates 'Look' Coordinates for EACH target based on belief.
+        2. Performs independent Hit/Miss checks for each target.
+        3. Updates all targets (Hits with precision, Misses with negative evidence).
         """
         device = agent.device
         if indices is None:
             indices = torch.arange(agent.batch_dim, device=device)
         batch_dim = len(indices)
-        
-        # Select WHICH target to verify
-        # We sample a target index 'k' proportional to estimated quality.
-        # Add epsilon to ensure we can explore even low-quality beliefs initially.
-        probs = torch.clamp(agent.belief_target_qual[indices], min=1e-6)
-        # Sample one index per agent in batch
-        # selected_k: (batch, 1)
-        selected_k_idx = torch.multinomial(probs, 1)
+        n_targets = agent.n_targets
 
-        # Generate 'Look' Coordinate (Hypothesis)
-        # Gather mu and sigma for the selected k
-        # mu: (batch, 1, 2)
-        sel_mu = torch.gather(agent.belief_target_pos[indices], 1, 
-                              selected_k_idx.unsqueeze(-1).expand(-1, 1, 2))
-        # sigma: (batch, 1, 2, 2)
-        sel_sigma = torch.gather(agent.belief_target_covariance[indices], 1, 
-                                 selected_k_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, 1, 2, 2))
-        
-        # Sample look position ~ N(mu_k, Sigma_k)
-        noise = torch.randn(batch_dim, 1, 2, device=device)
+        # --- 1. Look Coordinates Generation ---
+        # sel_mu: (batch, n_targets, 2)
+        sel_mu = agent.belief_target_pos[indices]
+        # sel_sigma: (batch, n_targets, 2, 2)
+        sel_sigma = agent.belief_target_covariance[indices]
+
+        # Sample look position ~ N(mu_k, Sigma_k) for each target
+        noise = torch.randn(batch_dim, n_targets, 2, device=device)
 
         try:
-             L = torch.linalg.cholesky(sel_sigma.squeeze(1)) # (batch, 2, 2)
-             look_pos = sel_mu.squeeze(1) + torch.matmul(L, noise.squeeze(1).unsqueeze(-1)).squeeze(-1)
-        except:
+             # Cholesky supports batch dimensions (..., 2, 2)
+             L = torch.linalg.cholesky(sel_sigma) 
+             # L @ noise: (..., 2, 2) @ (..., 2, 1) -> (..., 2, 1)
+             look_pos = sel_mu + torch.matmul(L, noise.unsqueeze(-1)).squeeze(-1)
+        except Exception:
              # Fallback if sigma not positive definite
-             std = torch.sqrt(torch.diagonal(sel_sigma.squeeze(1), dim1=-2, dim2=-1))
-             look_pos = sel_mu.squeeze(1) + noise.squeeze(1) * std
- 
-        # Physics Check (The Spotlight)
-        # Check against the GROUND TRUTH of the specific target we think this is.
-        
-        # Gather true position of the selected target
-        # targets is a list of objects, we need to stack them first
-        all_true_pos = torch.stack([t.state.pos[indices] for t in targets], dim=1) # (batch, n_targets, 2)
-        all_true_qual = torch.stack([t.quality[indices] for t in targets], dim=1)  # (batch, n_targets)
-        
-        true_pos_k = torch.gather(all_true_pos, 1, selected_k_idx.unsqueeze(-1).expand(-1, 1, 2)).squeeze(1)
-        true_qual_k = torch.gather(all_true_qual, 1, selected_k_idx).squeeze(1)
+             std = torch.sqrt(torch.diagonal(sel_sigma, dim1=-2, dim2=-1))
+             look_pos = sel_mu + noise * std
 
-        # Calculate Distance: Look Position vs True Position
-        dist_err = torch.norm(look_pos - true_pos_k, dim=1)
+        # --- 2. Physics Check (The Spotlight) ---
+        # Gather true positions and qualities for all targets
+        # all_true_pos: (batch, n_targets, 2)
+        all_true_pos = torch.stack([t.state.pos[indices] for t in targets], dim=1)
+        # all_true_qual: (batch, n_targets)
+        all_true_qual = torch.stack([t.quality[indices] for t in targets], dim=1)
+
+        # Calculate Distance: Look Position vs True Position for each target
+        dist_err = torch.norm(look_pos - all_true_pos, dim=2)
         
-        # Determine Hit vs Miss
+        # Determine Hit vs Miss per target
         is_hit = dist_err < spot_radius
         
-        # --- 4. Construct Observations (Gated Noise) ---
+        # --- 3. Construct Observations ---
         TINY_VAR = 1e-2  # High confidence
         HUGE_VAR = 1e4   # Low confidence
         
-        # Initialize output containers
-        out_pos = torch.zeros(batch_dim, agent.n_targets, 2, device=device)
-        out_cov = torch.zeros(batch_dim, agent.n_targets, 2, 2, device=device)
-        out_q = torch.zeros(batch_dim, agent.n_targets, device=device)
-        out_q_var = torch.zeros(batch_dim, agent.n_targets, device=device)
-
-        # Calculate distance for hit scaling
-        agent_pos = agent.state.pos[indices]
-        dist_to_target = torch.norm(agent_pos - true_pos_k, dim=1) # (batch,)
+        # Distance from agent to targets for noise scaling
+        agent_pos = agent.state.pos[indices].unsqueeze(1).expand(-1, n_targets, -1)
+        dist_to_target = torch.norm(agent_pos - all_true_pos, dim=2)
         
-        # Scale sigma based on distance (Linear Attenuation)
-        # sigma = sigma_0 + beta * d
-        # We start with sqrt(TINY_VAR) to ensure base precision is high
+        # Scale sigma based on distance
         sigma_spot = torch.sqrt(torch.tensor(TINY_VAR, device=device)) + agent.dist_noise_scale_priv * dist_to_target
         var_spot = sigma_spot ** 2
 
-        # Construction logic per batch element
-        # We'll use torch.where to handle hit vs miss
-        is_hit_expanded = is_hit.unsqueeze(-1) # (batch, 1)
+        # Construction logic vectorized across targets
+        is_hit_expanded = is_hit.unsqueeze(-1)
         
         # Quality: If hit -> true_qual, If miss -> 0
-        obs_q = torch.where(is_hit, true_qual_k, torch.zeros_like(true_qual_k))
-        # Quality Var: Always use var_spot (we are sure about what we saw/didn't see)
-        var_q = var_spot
+        out_q = torch.where(is_hit, all_true_qual, torch.zeros_like(all_true_qual))
+        # Quality Var: Always use var_spot (certainty about what was seen/not seen)
+        out_q_var = var_spot
         
-        # Position: If hit -> true_pos, If miss -> look_pos (but with huge variance)
-        obs_p = torch.where(is_hit_expanded, true_pos_k, look_pos)
+        # Position: If hit -> true_pos, If miss -> look_pos
+        out_pos = torch.where(is_hit_expanded, all_true_pos, look_pos)
         # Position Var: If hit -> var_spot, If miss -> HUGE_VAR
         var_p = torch.where(is_hit, var_spot, torch.tensor(HUGE_VAR, device=device))
         
-        # Scatter into full tensors
-        out_pos.scatter_(1, selected_k_idx.unsqueeze(-1).expand(-1, 1, 2), obs_p.unsqueeze(1))
-        
-        cov_eye = torch.eye(2, device=device).unsqueeze(0).expand(batch_dim, -1, -1)
-        cov_k = cov_eye * var_p.view(batch_dim, 1, 1)
-        out_cov.scatter_(1, selected_k_idx.unsqueeze(-1).unsqueeze(-1).expand(-1, 1, 2, 2), cov_k.unsqueeze(1))
-        
-        out_q.scatter_(1, selected_k_idx, obs_q.unsqueeze(1))
-        out_q_var.scatter_(1, selected_k_idx, var_q.unsqueeze(1))
+        # Construct full covariance tensors
+        cov_eye = torch.eye(2, device=device).view(1, 1, 2, 2).expand(batch_dim, n_targets, -1, -1)
+        out_cov = cov_eye * var_p.view(batch_dim, n_targets, 1, 1)
 
-        # IMPORTANT: Now we ALWAYS update the mask for the selected target
-        # even if it was a miss (to provide negative evidence).
-        mask = torch.zeros(batch_dim, agent.n_targets, device=device, dtype=torch.bool)
-        mask.scatter_(1, selected_k_idx, True)
-        agent.obs_target_mask[indices] = mask
+        # Update mask for ALL targets
+        agent.obs_target_mask[indices] = True
 
         return out_pos, out_cov, out_q, out_q_var
 
@@ -1120,9 +1090,8 @@ def compute_gradient(agent: ForagingAgent):
         # (batch, n_targets, 1) * (batch, n_targets, 2) -> sum over n_targets
         total_grad_direction = (stable_coeffs.unsqueeze(-1) * grad_vectors).sum(dim=1)
     elif agent.decision_making == "greedy":
-        # Pick the target with the highest weight (Log-Sum-Exp terms)
-        # weight_k = log(q_k) + log(p(x|theta_k))
-        best_target_idx = torch.argmax(log_weights, dim=1) # (batch,)
+        # Pick the target with the highest strictly estimated quality
+        best_target_idx = torch.argmax(log_q, dim=1) # (batch,)
         # Gather the gradient for the best target
         total_grad_direction = torch.gather(grad_vectors, 1, best_target_idx.view(batch_dim, 1, 1).expand(-1, 1, 2)).squeeze(1)
     elif agent.decision_making == "thompson":
@@ -1133,13 +1102,30 @@ def compute_gradient(agent: ForagingAgent):
         sampled_idx = torch.multinomial(probs, 1) # (batch, 1)
         # Gather the gradient
         total_grad_direction = torch.gather(grad_vectors, 1, sampled_idx.unsqueeze(-1).expand(-1, 1, 2)).squeeze(1)
+    elif agent.decision_making == "strongest":
+        # Select the target with the highest gradient magnitude |grad(q_i * p_i)|
+        # grad(q_i * p_i) = q_i * p_i * grad(log p_i) = exp(log_weights) * grad_vectors
+        # To avoid underflow, we use log-magnitudes: log_weights + log(|grad_vectors|)
+        log_grad_mag = torch.log(torch.norm(grad_vectors, dim=2) + 1e-12)
+        log_magnitudes = log_weights + log_grad_mag # (batch, n_targets)
+
+        best_target_idx = torch.argmax(log_magnitudes, dim=1)
+        total_grad_direction = torch.gather(grad_vectors, 1,
+                                            best_target_idx.view(batch_dim, 1, 1).expand(-1, 1, 2)).squeeze(1)
     else:
         raise ValueError(f"Unknown decision_making mode: {agent.decision_making}")
 
     # 8. Normalize and Update
     grad_norm = torch.norm(total_grad_direction, dim=1, keepdim=True)
-    grad_norm = torch.clamp(grad_norm, min=1e-6)
-    direction = total_grad_direction / grad_norm
+    # Use a tiny epsilon and torch.where for robust normalization.
+    # This ensures that even tiny non-zero gradients result in a unit vector,
+    # preventing the agent from freezing at local peaks or in 'indecision'
+    # between distant targets.
+    direction = torch.where(
+        grad_norm > 1e-12,
+        total_grad_direction / grad_norm,
+        torch.zeros_like(total_grad_direction)
+    )
 
     agent.state.vel = agent.momentum * agent.state.vel + (1 - agent.momentum) * direction * agent.max_speed
 

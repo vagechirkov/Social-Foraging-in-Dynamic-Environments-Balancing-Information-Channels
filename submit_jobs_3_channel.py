@@ -9,7 +9,7 @@ import os
 consensus_selectivity_array = [1.0]
 
 # Belief Parameters
-belief_selectivity_array = [0.25]
+belief_selectivity_array = [0.25, 0.75]
 gamma_belief_array = [0.01]  # Options: 0.1 1 10
 
 # Channel Mode
@@ -17,11 +17,11 @@ channel_y_name = "Belief"
 
 # Agent & Environment Dimensions
 dim_array = [2]  # Options: 5 10 15
-n_agent_array = [15, 30]  # Options: 20 30
+n_agent_array = [30, 45]  # Options: 20 30
 
 # Target
 n_targets_array = [2]
-target_qualities_array = ["'[1.0, 0.2]'"]
+target_qualities_array = ["'[1.0, 0.01]'", "'[1.0, 0.1]'"]
 target_speed_array = [0.3, 0.5, 0.7]  # Options: 0.1 0.3 0.5
 target_persistence_array = [20]
 relocation_interval_array = [1000]

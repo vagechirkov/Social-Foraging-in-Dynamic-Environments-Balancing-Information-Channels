@@ -54,7 +54,7 @@ if target_pattern == "levy":
     t_speed = st.sidebar.slider("Target Speed", 0.01, 2.0, 0.5)
 
 
-decision_making = st.sidebar.selectbox("Decision Making", ["sum", "greedy", "thompson"], index=1)
+decision_making = st.sidebar.selectbox("Decision Making", ["sum", "greedy", "thompson", "strongest"], index=1)
 
 # fps = st.sidebar.slider("FPS Limit", 1, 260, 100)
 fps = 100
@@ -76,14 +76,14 @@ def reset_simulation():
         'n_targets': n_targets, 
         'target_quality': 'HT',
         # 'target_speeds': [0.3, 0.5],
-        'target_qualities': [0.01, 1.0],
+        'target_qualities': [0.1, 1.0],
         'is_interactive': False, 
         'initialization_box_ratio': 1.0,
         'visualize_semidims': True, 
         'min_dist_between_entities': 0.1,
         'agent_radius': 0.01, 
         'max_speed': 0.05,
-        'dist_noise_scale_priv': 0.5,
+        'dist_noise_scale_priv': 0.05,
         'dist_noise_scale_soc': 0,
         'social_trans_scale': 0.01,
         'belief_selectivity_threshold': 0.1,

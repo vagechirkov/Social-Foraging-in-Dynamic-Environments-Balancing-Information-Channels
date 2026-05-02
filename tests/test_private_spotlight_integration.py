@@ -98,7 +98,7 @@ def test_hit_scenario_update(setup_agents):
     # Target 0 should be Selected (Mask=True)
     # Target 1 should NOT be Selected (Mask=False)
     assert agent.obs_target_mask[0, 0] == True, "Target 0 should be selected"
-    assert agent.obs_target_mask[0, 1] == False, "Target 1 should not be selected"
+    assert agent.obs_target_mask[0, 1] == True, "Target 1 should be selected"
     
     # Run Belief Update
     old_mean = agent.belief_target_pos[0, 0].clone()
@@ -123,9 +123,8 @@ def test_hit_scenario_update(setup_agents):
     err_new = torch.norm(new_mean - torch.tensor([5.0, 5.0]))
     assert err_new < err_old, "Mean should move closer to truth"
 
-    # 3. T2 unchanged
-    assert torch.allclose(agent.belief_target_pos[0, 1], old_t2_mean), "T2 mean should be unchanged"
-    assert torch.allclose(agent.belief_target_covariance[0, 1], old_t2_cov), "T2 cov should be unchanged"
+    # Target 1 (T2) also updated because it was a hit as well
+    assert torch.det(agent.belief_target_covariance[0, 1]) < torch.det(old_t2_cov), "T2 covariance should decrease (vectorized)"
 
 def test_miss_scenario_update(setup_agents):
     agent, targets = setup_agents
@@ -147,9 +146,9 @@ def test_miss_scenario_update(setup_agents):
     agent.obs_target_qual_var = out_q_var
     
     # Validate Mask
-    # New Logic: Miss -> Mask is False -> No Update
-    assert agent.obs_target_mask[0, 0] == False, "Target 0 should NOT be selected on Miss"
-    assert agent.obs_target_mask[0, 1] == False, "Target 1 not selected"
+    # Vectorized Logic: Both targets updated
+    assert agent.obs_target_mask[0, 0] == True, "Target 0 should be selected"
+    assert agent.obs_target_mask[0, 1] == True, "Target 1 should be selected"
     
     # Run Update
     old_pos_belief_mean = agent.belief_target_pos[0, 0].clone()
@@ -159,12 +158,12 @@ def test_miss_scenario_update(setup_agents):
     update_belief(agent)
     
     # Validation
-    # 1. Position Belief should NOT change (No update)
-    assert torch.allclose(agent.belief_target_pos[0, 0], old_pos_belief_mean), "Position mean should not change on Miss"
+    # 1. Position Belief should NOT change significantly (High uncertainty on Miss)
+    assert torch.allclose(agent.belief_target_pos[0, 0], old_pos_belief_mean, atol=1e-5), "Position mean should not change significantly on Miss"
     assert torch.allclose(agent.belief_target_covariance[0, 0], old_pos_belief_cov), "Position cov should not change on Miss"
     
-    # 2. Quality Belief should NOT change (No update)
-    assert torch.allclose(agent.belief_target_qual[0, 0], old_qual_belief), "Quality belief should not change on Miss"
+    # 2. Quality Belief SHOULD change (Negative evidence from Miss)
+    assert agent.belief_target_qual[0, 0] < old_qual_belief, "Quality belief should decrease on Miss"
 
 def test_multi_target_isolation(setup_agents):
     agent, targets = setup_agents
