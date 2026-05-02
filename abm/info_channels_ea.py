@@ -462,6 +462,7 @@ def run_experiment(cfg: DictConfig):
 
     total_time = time.time() - start_time
     print(f"Evolution Complete. Total time: {total_time:.2f}s")
+    env.close()
     logger.finish()
 
 if __name__ == "__main__":

@@ -128,6 +128,8 @@ def run_optimization(cfg: DictConfig):
         with torch.no_grad():
             full_fitness_tensor = evaluator.evaluate(env, all_islands)
             
+        env.close()
+            
         # 6. Calculate Objective
         # full_fitness_tensor: [total_pop, n_agents]
         # We need mean fitness per environment

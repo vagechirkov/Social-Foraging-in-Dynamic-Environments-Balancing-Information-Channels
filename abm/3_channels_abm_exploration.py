@@ -128,6 +128,8 @@ def run_exploration(cfg: DictConfig):
         # full_fitness_tensor shape: [total_pop_padded, n_agents]
         full_fitness_tensor = evaluator.evaluate(env, all_islands)
 
+    env.close()
+
     # We only care about the first 'num_actual_sims' rows
     fitness_tensor = full_fitness_tensor[:num_actual_sims]
     env_scores = fitness_tensor.mean(dim=1).cpu().numpy()
