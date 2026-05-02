@@ -73,6 +73,8 @@ class ForagingAgent(Agent):
             decision_making: str = "sum",  # "sum", "greedy", "thompson", or "strongest"
             x_dim: float = 1.0,
             y_dim: float = 1.0,
+            n_private_samples: int = 1,
+            p_spatial_explore: float = 0.0,
             *args,
             **kwargs,
     ):
@@ -97,6 +99,8 @@ class ForagingAgent(Agent):
         self.social_info_aggregation = social_info_aggregation
         self.max_belief_uncertainty = max_belief_uncertainty
         self.decision_making = decision_making
+        self.n_private_samples = n_private_samples
+        self.p_spatial_explore = p_spatial_explore
         self.x_dim = x_dim
         self.y_dim = y_dim
 
@@ -265,10 +269,11 @@ class AgentObservations:
     @staticmethod
     def private_spotlight(agent, targets, indices=None, spot_radius: float = 0.5):
         """
-        Active 'Spotlight' Sensing using Independent Sampling for each target.
-        1. Generates 'Look' Coordinates for EACH target based on belief.
-        2. Performs independent Hit/Miss checks for each target.
-        3. Updates all targets (Hits with precision, Misses with negative evidence).
+        Active 'Spotlight' Sensing using Independent Sampling for selected targets.
+        1. Selects k targets based on n_private_samples (default 1) using Thompson Sampling.
+        2. With probability p_spatial_explore, performs a random scan of the environment.
+        3. Otherwise, generates 'Look' Coordinates for EACH selected target based on belief.
+        4. Performs independent Hit/Miss checks.
         """
         device = agent.device
         if indices is None:
@@ -276,69 +281,103 @@ class AgentObservations:
         batch_dim = len(indices)
         n_targets = agent.n_targets
 
+        # --- 0. Target Selection ---
+        n_samples = min(agent.n_private_samples, n_targets)
+        # Thompson Sampling: Pick k targets based on quality beliefs
+        probs = torch.clamp(agent.belief_target_qual[indices], min=1e-6)
+        # selected_k: (batch, n_samples)
+        selected_k = torch.multinomial(probs, n_samples, replacement=False)
+
         # --- 1. Look Coordinates Generation ---
-        # sel_mu: (batch, n_targets, 2)
-        sel_mu = agent.belief_target_pos[indices]
-        # sel_sigma: (batch, n_targets, 2, 2)
-        sel_sigma = agent.belief_target_covariance[indices]
+        is_exploring = torch.rand(batch_dim, n_samples, device=device) < agent.p_spatial_explore
 
-        # Sample look position ~ N(mu_k, Sigma_k) for each target
-        noise = torch.randn(batch_dim, n_targets, 2, device=device)
+        # Informed Look Coordinates (based on belief)
+        sel_mu = torch.gather(agent.belief_target_pos[indices], 1,
+                              selected_k.unsqueeze(-1).expand(-1, -1, 2))
+        sel_sigma = torch.gather(agent.belief_target_covariance[indices], 1,
+                                 selected_k.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, 2, 2))
 
+        noise = torch.randn(batch_dim, n_samples, 2, device=device)
         try:
-             # Cholesky supports batch dimensions (..., 2, 2)
-             L = torch.linalg.cholesky(sel_sigma) 
-             # L @ noise: (..., 2, 2) @ (..., 2, 1) -> (..., 2, 1)
-             look_pos = sel_mu + torch.matmul(L, noise.unsqueeze(-1)).squeeze(-1)
+             L = torch.linalg.cholesky(sel_sigma)
+             informed_look = sel_mu + torch.matmul(L, noise.unsqueeze(-1)).squeeze(-1)
         except Exception:
-             # Fallback if sigma not positive definite
              std = torch.sqrt(torch.diagonal(sel_sigma, dim1=-2, dim2=-1))
-             look_pos = sel_mu + noise * std
+             informed_look = sel_mu + noise * std
+
+        # Random Look Coordinates (Uniform over world)
+        random_look = torch.empty(batch_dim, n_samples, 2, device=device)
+        random_look[..., 0].uniform_(-agent.x_dim, agent.x_dim)
+        random_look[..., 1].uniform_(-agent.y_dim, agent.y_dim)
+
+        look_pos = torch.where(is_exploring.unsqueeze(-1), random_look, informed_look)
 
         # --- 2. Physics Check (The Spotlight) ---
-        # Gather true positions and qualities for all targets
-        # all_true_pos: (batch, n_targets, 2)
-        all_true_pos = torch.stack([t.state.pos[indices] for t in targets], dim=1)
-        # all_true_qual: (batch, n_targets)
-        all_true_qual = torch.stack([t.quality[indices] for t in targets], dim=1)
+        # Gather true positions and qualities for ALL targets
+        all_true_pos_full = torch.stack([t.state.pos[indices] for t in targets], dim=1)
+        all_true_qual_full = torch.stack([t.quality[indices] for t in targets], dim=1)
 
-        # Calculate Distance: Look Position vs True Position for each target
-        dist_err = torch.norm(look_pos - all_true_pos, dim=2)
-        
-        # Determine Hit vs Miss per target
-        is_hit = dist_err < spot_radius
-        
-        # --- 3. Construct Observations ---
-        TINY_VAR = 1e-2  # High confidence
-        HUGE_VAR = 1e4   # Low confidence
-        
-        # Distance from agent to targets for noise scaling
-        agent_pos = agent.state.pos[indices].unsqueeze(1).expand(-1, n_targets, -1)
-        dist_to_target = torch.norm(agent_pos - all_true_pos, dim=2)
-        
-        # Scale sigma based on distance
-        sigma_spot = torch.sqrt(torch.tensor(TINY_VAR, device=device)) + agent.dist_noise_scale_priv * dist_to_target
-        var_spot = sigma_spot ** 2
+        # Calculate Distance: Look Position vs ALL targets
+        # dist_to_all: (batch, n_samples, n_targets)
+        dist_to_all = torch.norm(look_pos.unsqueeze(2) - all_true_pos_full.unsqueeze(1), dim=3)
+        hits_all = dist_to_all < spot_radius
 
-        # Construction logic vectorized across targets
-        is_hit_expanded = is_hit.unsqueeze(-1)
-        
-        # Quality: If hit -> true_qual, If miss -> 0
-        out_q = torch.where(is_hit, all_true_qual, torch.zeros_like(all_true_qual))
-        # Quality Var: Always use var_spot (certainty about what was seen/not seen)
-        out_q_var = var_spot
-        
-        # Position: If hit -> true_pos, If miss -> look_pos
-        out_pos = torch.where(is_hit_expanded, all_true_pos, look_pos)
-        # Position Var: If hit -> var_spot, If miss -> HUGE_VAR
-        var_p = torch.where(is_hit, var_spot, torch.tensor(HUGE_VAR, device=device))
-        
-        # Construct full covariance tensors
-        cov_eye = torch.eye(2, device=device).view(1, 1, 2, 2).expand(batch_dim, n_targets, -1, -1)
-        out_cov = cov_eye * var_p.view(batch_dim, n_targets, 1, 1)
+        # --- 3. Determine which targets to update ---
+        # A target k is updated if:
+        # 1. It was hit by ANY of the n_samples (Discovery/Verification)
+        # 2. It was the INTENDED target of an informed look (Informed Search)
 
-        # Update mask for ALL targets
-        agent.obs_target_mask[indices] = True
+        # Target k hit by any sample
+        hit_mask = hits_all.any(dim=1) # (batch, n_targets)
+
+        # Target k intended by any informed sample
+        intended_mask = torch.zeros(batch_dim, n_targets, device=device, dtype=torch.bool)
+        intended_mask.scatter_(1, selected_k, ~is_exploring)
+
+        # Update mask: hits or intended looks
+        agent.obs_target_mask[indices] = hit_mask | intended_mask
+
+        # --- 4. Construct Observations ---
+        TINY_VAR = 1e-2
+        HUGE_VAR = 1e4
+
+        out_pos = torch.zeros(batch_dim, n_targets, 2, device=device)
+        out_cov = torch.eye(2, device=device).view(1, 1, 2, 2).expand(batch_dim, n_targets, -1, -1) * HUGE_VAR
+        out_q = torch.zeros(batch_dim, n_targets, device=device)
+        out_q_var = torch.ones(batch_dim, n_targets, device=device) * HUGE_VAR
+
+        # Variance depends on distance to the true target position
+        dist_to_all_true = torch.norm(agent.state.pos[indices].unsqueeze(1) - all_true_pos_full, dim=2)
+        var_spot_all = (torch.sqrt(torch.tensor(TINY_VAR, device=device)) + agent.dist_noise_scale_priv * dist_to_all_true)**2
+
+        # A: Handle HITS (Highest priority)
+        out_pos = torch.where(hit_mask.unsqueeze(-1), all_true_pos_full, out_pos)
+        out_q = torch.where(hit_mask, all_true_qual_full, out_q)
+        out_q_var = torch.where(hit_mask, var_spot_all, out_q_var)
+
+        hit_cov = torch.eye(2, device=device).view(1, 1, 2, 2).expand(batch_dim, n_targets, -1, -1) * var_spot_all.view(batch_dim, n_targets, 1, 1)
+        out_cov = torch.where(hit_mask.view(batch_dim, n_targets, 1, 1), hit_cov, out_cov)
+
+        # B: Handle MISSES (Only for targets that were intended but NOT hit)
+        missed_mask = intended_mask & (~hit_mask)
+
+        # Find which sample was intended for which target (inverse of selected_k)
+        # sample_for_target[b, k] = s such that selected_k[b, s] == k
+        # selected_k: (batch, n_samples)
+        target_range = torch.arange(n_targets, device=device).view(1, 1, n_targets)
+        selected_expanded = selected_k.unsqueeze(-1) # (batch, n_samples, 1)
+        
+        # match: (batch, n_samples, n_targets)
+        match = (selected_expanded == target_range).float()
+        sample_for_target = torch.argmax(match, dim=1) # (batch, n_targets)
+
+        # Get the look position that was intended for this target
+        target_look_pos = torch.gather(look_pos, 1, sample_for_target.unsqueeze(-1).expand(-1, -1, 2))
+
+        out_pos = torch.where(missed_mask.unsqueeze(-1), target_look_pos, out_pos)
+        out_q_var = torch.where(missed_mask, var_spot_all, out_q_var)
+        # Position variance for misses remains HUGE_VAR (already initialized)
+        # Quality for misses remains 0.0 (already initialized)
 
         return out_pos, out_cov, out_q, out_q_var
 

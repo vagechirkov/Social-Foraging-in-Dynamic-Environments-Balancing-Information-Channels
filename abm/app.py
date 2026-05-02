@@ -30,12 +30,14 @@ st.set_page_config(page_title="ABM Simulation", layout="wide")
 # st.sidebar.header("Simulation Settings")
 n_agents = st.sidebar.slider("Number of Agents", 1, 50, 10)
 n_targets = st.sidebar.slider("Number of Targets", 1, 10, 2)
+n_private_samples = st.sidebar.slider("Private Samples", 1, n_targets, 1)
+p_spatial_explore = st.sidebar.slider("Spatial Exploration (Epsilon)", 0.0, 1.0, 0.01)
 spot_radius = st.sidebar.slider("Spotlight Radius", 0.1, 2.0, 0.5)
 target_circle_radius = st.sidebar.slider("Target Circle Radius", 0.0, 2.0, 0.4)
 
 p_none = st.sidebar.slider("P(None)", 0.0, 1.0, 0.0)
-p_private = st.sidebar.slider("P(Private)", 0.0, 1.0, 0.1)
-p_belief = st.sidebar.slider("P(Belief)", 0.0, 1.0, 0.9)
+p_private = st.sidebar.slider("P(Private)", 0.0, 1.0, 0.4)
+p_belief = st.sidebar.slider("P(Belief)", 0.0, 1.0, 0.6)
 # p_consensus = st.sidebar.slider("P(Consensus)", 0.0, 1.0, 0.0)
 p_consensus = 0.0
 
@@ -58,7 +60,7 @@ decision_making = st.sidebar.selectbox("Decision Making", ["sum", "greedy", "tho
 
 # fps = st.sidebar.slider("FPS Limit", 1, 260, 100)
 fps = 100
-plot_size = st.sidebar.slider("Plot Size", 6, 20, 12)
+plot_size = st.sidebar.slider("Plot Size", 6, 20, 8)
 
 # --- Session State ---
 if 'env' not in st.session_state:
@@ -100,6 +102,8 @@ def reset_simulation():
         'process_noise_scale_het_scale': 10,
         'bias_magnitude': 0,
         'decision_making': decision_making,
+        'n_private_samples': n_private_samples,
+        'p_spatial_explore': p_spatial_explore,
         'spot_radius': spot_radius,
         'channel_y_name': "Belief",
     }

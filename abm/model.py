@@ -99,6 +99,8 @@ class Scenario(BaseScenario):
             "cost_pos": kwargs.pop("cost_pos", 0.1),
             "cost_consensus": kwargs.pop("cost_consensus", 0.5),
             "consensus_selectivity_threshold": kwargs.pop("consensus_selectivity_threshold", 3.0),
+            "n_private_samples": kwargs.pop("n_private_samples", 1),
+            "p_spatial_explore": kwargs.pop("p_spatial_explore", 0.0),
             "spot_radius": kwargs.pop("spot_radius", 0.5),
             "decision_making": kwargs.pop("decision_making", "sum"),
             "x_dim": self.x_dim,

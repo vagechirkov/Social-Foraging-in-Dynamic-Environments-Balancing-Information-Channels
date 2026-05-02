@@ -65,4 +65,5 @@ python abm/3_channels_abm_exploration.py \
     bias_magnitude="$bias_magnitude" \
     spot_radius="$spot_radius" \
     +target_qualities="$target_qualities" \
-    +decision_making="greedy"
+    +decision_making="greedy" \
+    +p_spatial_explore=0.01
