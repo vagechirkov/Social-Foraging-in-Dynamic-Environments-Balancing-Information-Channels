@@ -97,6 +97,8 @@ class ForagingAgent(Agent):
         self.social_info_aggregation = social_info_aggregation
         self.max_belief_uncertainty = max_belief_uncertainty
         self.decision_making = decision_making
+        self.x_dim = x_dim
+        self.y_dim = y_dim
 
         # 3. Energy Costs Vector [Priv, Belief, Heading, Pos, None, Consensus]
         # Used for reward calculation/energy expenditure tracking
@@ -153,6 +155,24 @@ class ForagingAgent(Agent):
         # Quality Variance sigma^2_{q, i, k}: (batch, n_targets)
         # Initialize with high variance (uncertainty)
         self.belief_target_qual_var = torch.ones(batch_dim, n_targets, device=device)
+
+    def reset_belief(self):
+        """Resets the agent's belief to its initial state (randomly distributed within x_dim, y_dim)."""
+        self.belief_target_pos = torch.cat([
+            torch.empty(self.batch_dim, self.n_targets, 1, device=self.device).uniform_(-self.x_dim, self.x_dim),
+            torch.empty(self.batch_dim, self.n_targets, 1, device=self.device).uniform_(-self.y_dim, self.y_dim)
+        ], dim=2)
+
+        # Covariances Sigma_{i,k}: (batch, n_targets, 2, 2)
+        # Initialize with identity matrices to represent initial uncertainty
+        self.belief_target_covariance = torch.eye(2, device=self.device).reshape(1, 1, 2, 2).repeat(self.batch_dim,
+                                                                                                  self.n_targets, 1, 1)
+
+        # Quality weights q_{i,k}: (batch, n_targets)
+        self.belief_target_qual = torch.zeros(self.batch_dim, self.n_targets, device=self.device)
+        # Quality Variance sigma^2_{q, i, k}: (batch, n_targets)
+        # Initialize with high variance (uncertainty)
+        self.belief_target_qual_var = torch.ones(self.batch_dim, self.n_targets, device=self.device)
 
 
 class AgentObservations:

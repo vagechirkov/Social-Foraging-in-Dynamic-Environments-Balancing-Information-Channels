@@ -76,7 +76,7 @@ def reset_simulation():
         'n_targets': n_targets, 
         'target_quality': 'HT',
         # 'target_speeds': [0.3, 0.5],
-        'target_qualities': [0.05, 1.0],
+        'target_qualities': [0.01, 1.0],
         'is_interactive': False, 
         'initialization_box_ratio': 1.0,
         'visualize_semidims': True, 
@@ -110,6 +110,31 @@ def reset_simulation():
 
 col1, col2 = st.columns(2)
 if col2.button("Initialize / Reset"): reset_simulation()
+
+if col2.button("Wipe 20% Belief"):
+    if st.session_state.env is not None:
+        import random
+        raw_env = st.session_state.env._env if hasattr(st.session_state.env, '_env') else st.session_state.env
+        foraging_agents = raw_env.scenario.foraging_agents
+        n_to_reset = max(1, int(len(foraging_agents) * 0.2))
+        agents_to_reset = random.sample(foraging_agents, n_to_reset)
+        for agent in agents_to_reset:
+            agent.reset_belief()
+        st.sidebar.success(f"Wiped belief for {n_to_reset} agents.")
+
+if col2.button("Swap Target Qualities"):
+    if st.session_state.env is not None:
+        raw_env = st.session_state.env._env if hasattr(st.session_state.env, '_env') else st.session_state.env
+        target_agents = raw_env.scenario.target_agents
+        if len(target_agents) >= 2:
+            # Reversing qualities
+            qualities = [t.quality.clone() for t in target_agents]
+            for i in range(len(target_agents)):
+                target_agents[i].quality = qualities[-(i+1)]
+            st.sidebar.success("Swapped target qualities.")
+        else:
+            st.sidebar.warning("Need at least 2 targets to swap.")
+
 run_simulation = col2.toggle("Run Simulation", value=False)
 placeholder = col1.empty()
 
