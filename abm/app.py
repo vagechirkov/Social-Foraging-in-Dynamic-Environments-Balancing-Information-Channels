@@ -29,8 +29,9 @@ st.set_page_config(page_title="ABM Simulation", layout="wide")
 # --- Simulation Settings ---
 # st.sidebar.header("Simulation Settings")
 n_agents = st.sidebar.slider("Number of Agents", 1, 50, 10)
-n_targets = st.sidebar.slider("Number of Targets", 1, 10, 1)
+n_targets = st.sidebar.slider("Number of Targets", 1, 10, 2)
 spot_radius = st.sidebar.slider("Spotlight Radius", 0.1, 2.0, 0.5)
+target_circle_radius = st.sidebar.slider("Target Circle Radius", 0.0, 2.0, 0.4)
 
 p_none = st.sidebar.slider("P(None)", 0.0, 1.0, 0.0)
 p_private = st.sidebar.slider("P(Private)", 0.0, 1.0, 0.1)
@@ -72,7 +73,7 @@ def reset_simulation():
         'n_agents': n_agents, 
         'n_targets': n_targets, 
         'target_quality': 'HT',
-        'target_speeds': [0.5, 0.5],
+        # 'target_speeds': [0.3, 0.5],
         'target_qualities': [0.2, 1.0],
         'is_interactive': False, 
         'initialization_box_ratio': 1.0,
@@ -109,9 +110,21 @@ if col2.button("Initialize / Reset"): reset_simulation()
 run_simulation = col2.toggle("Run Simulation", value=False)
 placeholder = col1.empty()
 
-def render_heatmap(env, fig, ax):
+def render_heatmap(env, fig, ax, target_circle_radius):
     render_env_frame(env, ax)
     
+    # Draw circle around targets
+    if hasattr(env, '_env'):
+         raw_env = env._env
+    else:
+         raw_env = env
+    
+    for agent in raw_env.world.agents:
+        if "target" in agent.name or isinstance(agent, TargetAgent):
+            pos = agent.state.pos[0].detach().cpu().numpy()
+            circle = plt.Circle((pos[0], pos[1]), target_circle_radius, color='red', fill=False, linestyle='--', alpha=0.5)
+            ax.add_patch(circle)
+
     buf = io.BytesIO()
     fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.05, dpi=80)
     buf.seek(0)
@@ -150,11 +163,11 @@ if st.session_state.env is not None:
             env.step(td)
             st.session_state.step += 1
             
-            img = render_heatmap(env, fig, ax)
+            img = render_heatmap(env, fig, ax, target_circle_radius)
             placeholder.image(img, caption=f"Step {st.session_state.step}")
             time.sleep(1/fps)
     else:
-        img = render_heatmap(env, fig, ax)
+        img = render_heatmap(env, fig, ax, target_circle_radius)
         placeholder.image(img, caption=f"Paused - Step {st.session_state.step}")
     plt.close(fig)
 else:
