@@ -1,0 +1,51 @@
+project_name: "ssga_2_targets"
+run_name: "ssga_run"
+
+use_gpu: True
+use_wandb: True
+seed: 42
+log_freq: 1
+eve_min: 0.01
+eve_max: 0.1
+init_strategy: "middle"
+
+n_envs: 5000        # Number of islands (replicates)
+n_agents: 30       # Agents per island
+max_ticks: 100000   # Total simulation ticks
+
+# Punctuated Shift
+env_switch: True
+switch_time: 10000
+
+# SSGA Parameters
+ssga:
+  eval_interval: 500
+  cull_fraction: 0.15
+  mutation_prob: 0.6
+  mutation_sigma: 0.1
+
+# Environment & Physics
+x_dim: 2
+y_dim: 2
+base_noise: 0.1
+dist_noise_scale_priv: 0.05
+dist_noise_scale_soc: 0.0
+social_trans_scale: 0.01
+spot_radius: 0.25
+p_spatial_explore: 0.0
+belief_selectivity: 0.25
+decision_making: "greedy"
+bias_magnitude: 0.0
+
+# Targets
+n_targets: 2
+target_speed: 0.5
+target_persistence: 20
+targets_quality: "HM"
+target_qualities: [1.0, 0.01]
+target_movement_pattern: "crw"
+relocation_interval: 100000000000
+
+# Costs (Energy)
+cost_priv: 0.05
+cost_belief: 0.05

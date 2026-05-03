@@ -958,7 +958,13 @@ def add_process_noise_to_belief(agent: ForagingAgent, target_speed):
     if isinstance(target_speed, torch.Tensor):
         target_speed = target_speed.view(1, -1, 1, 1)
 
-    Q_scale = agent.process_noise_scale * (target_speed / 0.1)
+    if isinstance(agent.process_noise_scale, torch.Tensor):
+        proc_noise = agent.process_noise_scale.view(-1, 1, 1, 1)
+        Q_scale = proc_noise
+    else:
+        proc_noise = agent.process_noise_scale
+        Q_scale = proc_noise * (target_speed / 0.1)
+
     Q = torch.eye(2, device=agent.device).view(1, 1, 2, 2).expand_as(agent.belief_target_covariance) * (Q_scale ** 2)
 
     # Add process noise to current belief

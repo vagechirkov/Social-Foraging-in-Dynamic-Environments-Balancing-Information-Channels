@@ -35,7 +35,7 @@ class Scenario(BaseScenario):
         self.viewer_zoom = None
         self.is_interactive = False
 
-        self.action_size = 1
+        self.action_size = 2
         self.n_agents = None
         self.process_noise_scale_het_ratio = None
         self.process_noise_scale_het_scale = None
@@ -88,7 +88,7 @@ class Scenario(BaseScenario):
         self.max_speed = kwargs.pop("max_speed", 0.05)
         self.process_noise_scale_het_ratio = kwargs.pop("process_noise_scale_het_ratio", 0.0)
         self.process_noise_scale_het_scale = kwargs.pop("process_noise_scale_het_scale", 1.0)
-        self.bias_magnitude = kwargs.pop("bias_magnitude", 0.5)
+        self.bias_magnitude = kwargs.pop("bias_magnitude", 0.0)
 
         agent_kwargs = {
             "base_noise": kwargs.pop("base_noise", 0.1),
@@ -266,16 +266,20 @@ class Scenario(BaseScenario):
                     self.internal_swap_qualities()
 
         if self.is_interactive:
-            probs = torch.zeros(6)
-            probs[0] = 0.5 # 0.0 if 'agent_0' in agent.name else 1.0 # Private
-            probs[1] = 0.5 # 1.0 if 'agent_0' in agent.name else 0.0 # Belief
-            probs[2] = 0.0 # Heading
-            probs[3] = 0.0 # Position
-            probs[4] = 0.0 # 9 # None (no update)
-            probs[5] = 0.0 # Consensus
-            agent.action.u = torch.distributions.Categorical(probs=probs).sample((agent.batch_dim, 1))
+            probs = torch.zeros(3)
+            probs[0] = 0.5 # Private
+            probs[1] = 0.5 # Social
+            probs[2] = 0.0 # None
+            # The remaining indices (3,4,5) are no longer used for channels in the 4-gene setup
+            channel_u = torch.distributions.Categorical(probs=probs).sample((agent.batch_dim, 1))
+            eve_u = torch.full((agent.batch_dim, 1), 0.02, device=agent.device)
+            agent.action.u = torch.cat([channel_u, eve_u], dim=-1)
 
         if isinstance(agent, ForagingAgent):
+            if agent.action.u is not None and agent.action.u.shape[-1] == 2:
+                agent.process_noise_scale = agent.action.u[:, 1]
+                agent.action.u = agent.action.u[:, 0:1]
+
             targets = self.target_agents
             other_agents = [a for a in self.foraging_agents if a != agent]
 
@@ -305,6 +309,60 @@ class Scenario(BaseScenario):
         # unless handled, but here it's mostly for rendering/reward.
         for i in range(2):
             self.target_agents[i].shape._radius = self.agent_radius * self.target_agents[i].quality[0].item() * 4
+
+    def reinitialize_agents(self, newborn_mask: torch.Tensor):
+        """
+        Resets physical positions and beliefs for newly cloned agents.
+        newborn_mask: boolean tensor of shape (batch_dim, n_agents)
+        """
+        device = self.world.device
+        batch_dim = self.world.batch_dim
+
+        for i, agent in enumerate(self.foraging_agents):
+            if not isinstance(agent, ForagingAgent):
+                continue
+                
+            agent_mask = newborn_mask[:, i]
+            
+            if not agent_mask.any():
+                continue
+
+            # Randomize positions
+            new_pos = torch.cat([
+                torch.empty(batch_dim, 1, device=device).uniform_(-self.world.x_semidim * self.initialization_box_ratio,
+                                                                  self.world.x_semidim * self.initialization_box_ratio),
+                torch.empty(batch_dim, 1, device=device).uniform_(-self.world.y_semidim * self.initialization_box_ratio,
+                                                                  self.world.y_semidim * self.initialization_box_ratio)
+            ], dim=1)
+            
+            agent.state.pos = torch.where(agent_mask.unsqueeze(-1), new_pos, agent.state.pos)
+            agent.state.vel = torch.where(agent_mask.unsqueeze(-1), torch.zeros_like(agent.state.vel), agent.state.vel)
+            
+            # Reset beliefs manually for the masked indices
+            # (We cannot call agent.reset_belief() because it resets for the whole batch)
+            # We must only reset it for the masked indices.
+            # We'll do it manually here.
+            
+            new_belief_pos = torch.cat([
+                torch.empty(batch_dim, self.n_targets, 1, device=device).uniform_(-self.x_dim, self.x_dim),
+                torch.empty(batch_dim, self.n_targets, 1, device=device).uniform_(-self.y_dim, self.y_dim)
+            ], dim=2)
+            agent.belief_target_pos = torch.where(agent_mask.unsqueeze(-1).unsqueeze(-1), new_belief_pos, agent.belief_target_pos)
+            
+            new_cov = torch.eye(2, device=device).reshape(1, 1, 2, 2).repeat(batch_dim, self.n_targets, 1, 1)
+            agent.belief_target_covariance = torch.where(agent_mask.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1), new_cov, agent.belief_target_covariance)
+            
+            new_qual = torch.zeros(batch_dim, self.n_targets, device=device)
+            agent.belief_target_qual = torch.where(agent_mask.unsqueeze(-1), new_qual, agent.belief_target_qual)
+            
+            new_qual_var = torch.ones(batch_dim, self.n_targets, device=device)
+            agent.belief_target_qual_var = torch.where(agent_mask.unsqueeze(-1), new_qual_var, agent.belief_target_qual_var)
+            
+            agent.target_distance_reward = torch.where(agent_mask, torch.zeros_like(agent.target_distance_reward), agent.target_distance_reward)
+            agent.target_reward = torch.where(agent_mask, torch.zeros_like(agent.target_reward), agent.target_reward)
+            agent.channel_costs_reward = torch.where(agent_mask, torch.zeros_like(agent.channel_costs_reward), agent.channel_costs_reward)
+            agent.collision_reward = torch.where(agent_mask, torch.zeros_like(agent.collision_reward), agent.collision_reward)
+            agent.total_reward = torch.where(agent_mask, torch.zeros_like(agent.total_reward), agent.total_reward)
 
 
     def action_script_creator(self):

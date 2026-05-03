@@ -114,8 +114,9 @@ def render_env_frame(env, ax):
     return ax
 
 
-CHANNEL_NAMES = ["Priv", "Belief", "Heading", "Pos", "None", "Consensus"]
+CHANNEL_NAMES = ["Priv", "Social", "None"]
 N_CHANNELS = len(CHANNEL_NAMES)
+N_GENES = 4  # 3 channels + 1 EVE (process_noise_scale)
 
 
 class GenePersistenceTransform(Transform):
@@ -156,10 +157,10 @@ class SimpleAgent(list):
 class VmasEvaluator:
     """Handles Environment Creation and Fitness Evaluation."""
 
-    def __init__(self, cfg, device: str):
+    def __init__(self, cfg, device: str = "cpu", num_workers: Optional[int] = None):
         self.cfg = cfg
         self.device = device
-        self.num_workers = self.get_num_workers()
+        self.num_workers = num_workers if num_workers is not None else self.get_num_workers()
 
         # Handle DictConfig (Hydra) vs Namespace (argparse) access for pop_size
         n_envs = cfg.n_envs
@@ -240,7 +241,7 @@ class VmasEvaluator:
             # Pad with zeros to match total_pop.
             # These padded agents will run but their results will be discarded.
             n_pad = self.total_pop - n_requested_islands
-            pad_genes = torch.zeros(n_pad * self.cfg.n_agents, N_CHANNELS, device=self.device)
+            pad_genes = torch.zeros(n_pad * self.cfg.n_agents, N_GENES, device=self.device)
             population_genes = torch.cat([population_genes, pad_genes], dim=0)
         
         # Reshape Genes & Match Environment Batch Size
@@ -250,14 +251,14 @@ class VmasEvaluator:
                 self.num_workers,
                 self.sub_batch_size,
                 self.cfg.n_agents,
-                N_CHANNELS
+                N_GENES
             )
             batch_size_shape = [self.num_workers, self.sub_batch_size]
         else:
             reshaped_genes = population_genes.view(
                 self.total_pop,
                 self.cfg.n_agents,
-                N_CHANNELS
+                N_GENES
             )
             batch_size_shape = [self.total_pop]
 
@@ -273,8 +274,17 @@ class VmasEvaluator:
 
         # Policy
         def policy_func(genes_logits):
-            dist = torch.distributions.Categorical(logits=genes_logits)
-            return dist.sample().unsqueeze(-1).float()
+            channel_logits = genes_logits[..., :N_CHANNELS]
+            dist = torch.distributions.Categorical(logits=channel_logits)
+            action_choice = dist.sample().unsqueeze(-1).float()
+            
+            # Extract EVE (gene index 3)
+            # Apply sigmoid and scale it to bounds [0.005, 0.2]
+            eve_raw = genes_logits[..., 3:4]
+            eve = torch.sigmoid(eve_raw) * (0.2 - 0.005) + 0.005
+            
+            # Combine into a single action tensor
+            return torch.cat([action_choice, eve], dim=-1)
 
         policy = TensorDictModule(policy_func, in_keys=["genes"], out_keys=[env.action_key])
 
@@ -486,13 +496,13 @@ class ExperimentLogger:
             # Calculate probabilities for ALL agents
             all_genes = [ind for island in islands for ind in island]
             all_logits = torch.tensor(all_genes, dtype=torch.float32, device='cpu')
-            all_probs = torch.softmax(all_logits, dim=-1) # [TotalAgents, N_CHANNELS]
+            all_probs = torch.softmax(all_logits[..., :N_CHANNELS], dim=-1) # [TotalAgents, N_CHANNELS]
             
             # Calculate probabilities for Top-K agents
             top_k_indices_list = top_k_indices.cpu().numpy()
             top_k_genes = [ind for i in top_k_indices_list for ind in islands[i]]
             top_k_logits = torch.tensor(top_k_genes, dtype=torch.float32, device='cpu')
-            top_k_probs = torch.softmax(top_k_logits, dim=-1) # [TopK*Agents, N_CHANNELS]
+            top_k_probs = torch.softmax(top_k_logits[..., :N_CHANNELS], dim=-1) # [TopK*Agents, N_CHANNELS]
 
             # Log distributions for active channels only
             active_indices = [i for i in range(N_CHANNELS) if i not in self.frozen_indices]
@@ -503,6 +513,10 @@ class ExperimentLogger:
                 metrics[f"{prefix}hist/prob_global_{name}"] = wandb.Histogram(all_probs[:, i].numpy())
                 # Top-K Histogram for this channel
                 metrics[f"{prefix}hist/prob_top_k_{name}"] = wandb.Histogram(top_k_probs[:, i].numpy())
+            
+            # Global and Top-K Histograms for EVE (gene index 3)
+            metrics[f"{prefix}hist/eve_global"] = wandb.Histogram(all_logits[:, 3].numpy())
+            metrics[f"{prefix}hist/eve_top_k"] = wandb.Histogram(top_k_logits[:, 3].numpy())
    
             # 5. Best Individual Scalars
             best_ind_idx = torch.argmax(fitness_tensor.view(-1))
@@ -515,6 +529,7 @@ class ExperimentLogger:
             avg_probs = all_probs.mean(dim=0)
             for i in active_indices:
                 metrics[f"{prefix}avg/prob_{CHANNEL_NAMES[i]}"] = avg_probs[i].item()
+            metrics[f"{prefix}avg/eve"] = all_logits[:, 3].mean().item()
 
             # 7. Periodic Table Logging (Snapshot)
             if log_table:
@@ -585,6 +600,51 @@ class ExperimentLogger:
 
         plt.close(fig_all)
         plt.close(fig_top)
+
+    def log_ssga_metrics(
+        self, 
+        interval_fitness: torch.Tensor,
+        probs: torch.Tensor,
+        eve_val: torch.Tensor,
+        genes: torch.Tensor,
+        global_covs: torch.Tensor,
+        step: int,
+        n_islands: int,
+        prefix: str = "ssga/"
+    ):
+        """Logs SSGA-specific metrics including Price equation covariances, histograms, and ternary density."""
+        if not self.use_wandb:
+            return
+
+        metrics = {
+            "price/cov_priv": global_covs[0].item(),
+            "price/cov_soc": global_covs[1].item(),
+            "price/cov_none": global_covs[2].item(),
+            "price/cov_eve": global_covs[3].item(),
+        }
+        
+        # Global Histograms
+        flat_fit = interval_fitness.flatten().cpu().numpy()
+        flat_probs = probs.reshape(-1, 3).cpu().numpy()
+        flat_eve = eve_val.flatten().cpu().numpy()
+        
+        metrics[f"{prefix}hist/fitness"] = wandb.Histogram(flat_fit)
+        metrics[f"{prefix}hist/eve"] = wandb.Histogram(flat_eve)
+        for i in range(3):
+            metrics[f"{prefix}hist/prob_{CHANNEL_NAMES[i]}"] = wandb.Histogram(flat_probs[:, i])
+        
+        wandb.log(metrics, step=step)
+        
+        # Ternary density plot for whole population
+        all_agents_flat = genes.view(-1, N_GENES).cpu().numpy()
+        fig_all = self._generate_ternary_density_fig(
+            all_agents_flat, 
+            n_islands, 
+            [0, 1, 2], 
+            "All Agents Strategy Density"
+        )
+        wandb.log({f"{prefix}ternary_density_all": wandb.Image(fig_all)}, step=step)
+        plt.close(fig_all)
 
     def log_parallel_plot(self, islands, fitness_tensor, gen, prefix: str = ""):
         """Generates and logs the parallel coordinate plot for Top K islands."""
@@ -660,12 +720,12 @@ class ExperimentLogger:
         
         # Use actual length of top_islands, which might be less than cfg.top_k if replicates < top_k
         actual_k = len(top_islands)
-        logits_tensor = logits_tensor.view(actual_k, self.cfg.n_agents, N_CHANNELS)
-        probs_tensor = torch.softmax(logits_tensor, dim=2)
+        logits_tensor = logits_tensor.view(actual_k, self.cfg.n_agents, N_GENES)
+        probs_tensor = torch.softmax(logits_tensor[..., :N_CHANNELS], dim=2)
 
         # 2. Sort Agents
-        # Sort order: Pos(3), Heading(2), Belief(1), None(4), Priv(0), Consensus(5)
-        sort_order_indices = [3, 2, 1, 4, 0, 5] 
+        # Sort order: Social(1), None(2), Priv(0)
+        sort_order_indices = [1, 2, 0] 
 
         # Filter out frozen indices from sorting logic to avoid noise
         active_sort_indices = [idx for idx in sort_order_indices if idx not in self.frozen_indices]
@@ -745,7 +805,7 @@ class ExperimentLogger:
         final_tensor = torch.tensor(all_genes, dtype=torch.float32, device='cpu')
 
         # Calculate Probabilities
-        final_probs = torch.softmax(final_tensor.view(-1, N_CHANNELS), dim=1).numpy()
+        final_probs = torch.softmax(final_tensor.view(-1, N_GENES)[..., :N_CHANNELS], dim=1).numpy()
 
         fig, ax = plt.subplots(figsize=(12, 6))
 
@@ -758,7 +818,7 @@ class ExperimentLogger:
             island_tensor = torch.tensor(island_genes, dtype=torch.float32, device='cpu')
 
             # Calculate Probabilities [N_AGENTS, N_CHANNELS]
-            island_probs = torch.softmax(island_tensor.view(-1, N_CHANNELS), dim=1).numpy()
+            island_probs = torch.softmax(island_tensor.view(-1, N_GENES)[..., :N_CHANNELS], dim=1).numpy()
 
             # Filter out frozen columns
             filtered_probs = island_probs[:, active_indices]
@@ -787,8 +847,8 @@ class ExperimentLogger:
         logits = torch.tensor(agents, dtype=torch.float32, device='cpu')
 
         # Softmax over all channels first to get true probabilities relative to everything
-        logits_tensor = logits.view(n_islands, self.cfg.n_agents, N_CHANNELS)
-        probs_tensor = torch.softmax(logits_tensor, dim=2)
+        logits_tensor = logits.view(n_islands, self.cfg.n_agents, N_GENES)
+        probs_tensor = torch.softmax(logits_tensor[..., :N_CHANNELS], dim=2)
 
         # Extract active
         probs_active = probs_tensor[:, :, active_indices]
