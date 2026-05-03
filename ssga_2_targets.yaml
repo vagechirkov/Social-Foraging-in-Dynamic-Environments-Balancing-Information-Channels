@@ -11,7 +11,7 @@ init_strategy: "middle"
 
 n_envs: 5000        # Number of islands (replicates)
 n_agents: 30       # Agents per island
-max_ticks: 100000   # Total simulation ticks
+max_ticks: 100000000   # Total simulation ticks
 
 # Punctuated Shift
 env_switch: True

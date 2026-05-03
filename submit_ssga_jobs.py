@@ -20,10 +20,10 @@ def submit_ssga_jobs():
     print(f"N agents: {n_agents_list}")
     print(f"Using submit script: {sbatch_script}")
 
-    combinations = list(itertools.product(switch_times, cull_fractions, n_agents_list))
+    combinations = list(itertools.product(n_agents_list, switch_times, cull_fractions))
     print(f"Total jobs: {len(combinations)}")
 
-    for switch_time, cull_frac, n_agents in combinations:
+    for n_agents, switch_time, cull_frac in combinations:
         run_name = f"ssga_st{switch_time}_cf{cull_frac}_nag{n_agents}"
         
         cmd = [
@@ -33,7 +33,8 @@ def submit_ssga_jobs():
             f"ssga.cull_fraction={cull_frac}",
             f"n_agents={n_agents}",
             f"run_name={run_name}",
-            f"use_gpu=True"
+            f"use_gpu=True",
+            f"max_ticks={100_000_000_000}"
         ]
         
         if args.dry_run:
