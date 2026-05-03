@@ -46,6 +46,7 @@ def probs_to_logits(p_priv, p_y, p_none, channel_y_idx=IDX_BELIEF):
 
     return logits
 
+
 @hydra.main(version_base=None, config_path=".", config_name="3_channels_abm")
 def run_exploration(cfg: DictConfig):
 
@@ -123,55 +124,162 @@ def run_exploration(cfg: DictConfig):
     logger = ExperimentLogger(cfg.use_wandb, cfg, save_fig_locally=save_fig)
 
     # 4. Evaluate
+    env_switch = getattr(cfg, "env_switch", False) and cfg.n_targets == 2
+    
+    def process_fitness(full_fitness_tensor, max_steps_phase):
+        # We only care about the first 'num_actual_sims' rows
+        fitness_tensor = full_fitness_tensor[:num_actual_sims]
+        env_scores = fitness_tensor.mean(dim=1).cpu().numpy()
+        results_map = {} # Key: (p_p, p_b, p_n), Value: list of scores
+
+        for idx, score in enumerate(env_scores):
+            config_idx = idx // cfg.replicates
+            config = simplex_points[config_idx]
+
+            if config not in results_map:
+                results_map[config] = []
+            results_map[config].append(score)
+
+        # Calculate average fitness for each unique config
+        plot_data = []
+        for config, scores in results_map.items():
+            avg_score = np.mean(scores) / max_steps_phase
+            p_p, p_y, p_n = config
+            
+            plot_data.append({
+                'priv': p_p,
+                'bel': p_y, # Represents channel_y
+                'none': p_n,
+                'score': avg_score
+            })
+        return plot_data
+
     print("Starting simulation...")
-    with torch.no_grad():
-        # full_fitness_tensor shape: [total_pop_padded, n_agents]
-        full_fitness_tensor = evaluator.evaluate(env, all_islands)
+
+    # Focal condition: closest grid point to (p_priv≈0.4, p_bel≈0.6)
+    FOCAL_PRIV, FOCAL_BEL = 0.4, 0.6
+    focal_config_idx = min(
+        range(len(simplex_points)),
+        key=lambda i: abs(simplex_points[i][0] - FOCAL_PRIV) + abs(simplex_points[i][1] - FOCAL_BEL)
+    )
+    focal_config = simplex_points[focal_config_idx]
+    focal_flat_indices = list(range(focal_config_idx * cfg.replicates,
+                                    (focal_config_idx + 1) * cfg.replicates))
+    focal_label = f"priv{focal_config[0]:.2f}_bel{focal_config[1]:.2f}"
+    print(f"Focal condition: priv={focal_config[0]:.2f}, bel={focal_config[1]:.2f}, "
+          f"none={focal_config[2]:.2f} | flat env indices {focal_flat_indices[0]}–{focal_flat_indices[-1]}")
+
+    # 4. Evaluate
+    env_switch = getattr(cfg, "env_switch", False) and cfg.n_targets == 2
+    switch_time = getattr(cfg, "switch_time", 500)
+    
+    def process_fitness(full_fitness_tensor, max_steps_total):
+        # We only care about the first 'num_actual_sims' rows
+        fitness_tensor = full_fitness_tensor[:num_actual_sims]
+        env_scores = fitness_tensor.mean(dim=1).cpu().numpy()
+        results_map = {} # Key: (p_p, p_b, p_n), Value: list of scores
+
+        for idx, score in enumerate(env_scores):
+            config_idx = idx // cfg.replicates
+            config = simplex_points[config_idx]
+
+            if config not in results_map:
+                results_map[config] = []
+            results_map[config].append(score)
+
+        # Calculate average fitness for each unique config
+        plot_data = []
+        for config, scores in results_map.items():
+            avg_score = np.mean(scores) / max_steps_total
+            p_p, p_y, p_n = config
+            
+            plot_data.append({
+                'priv': p_p,
+                'bel': p_y, # Represents channel_y
+                'none': p_n,
+                'score': avg_score
+            })
+        return plot_data
+
+    if env_switch and switch_time < cfg.max_steps:
+        print(f"Environment Switch enabled. Running single simulation and reconstructing results (Switch Time: {switch_time}).")
+        with torch.no_grad():
+            full_fitness_tensor, info = evaluator.evaluate(
+                env, all_islands, max_steps=cfg.max_steps,
+                return_info=True, focal_indices=focal_flat_indices,
+                return_rewards_all=True
+            )
+            
+            rewards_all = info["rewards_all"] # [TotalPop, Steps, Agents, 1]
+            
+            # Split and sum rewards over the time dimension
+            # Shape: [TotalPop, Agents]
+            fitness_1 = rewards_all[:, :switch_time, :, :].sum(dim=1).squeeze(-1)
+            fitness_2 = rewards_all[:, switch_time:, :, :].sum(dim=1).squeeze(-1)
+            
+            plot_data_before = process_fitness(fitness_1, switch_time)
+            plot_data_after = process_fitness(fitness_2, cfg.max_steps - switch_time)
+            
+            # Calculate Performance Delta
+            plot_data_delta = []
+            for b, a in zip(plot_data_before, plot_data_after):
+                plot_data_delta.append({
+                    'priv': b['priv'],
+                    'bel': b['bel'],
+                    'none': b['none'],
+                    'score': a['score'] - b['score']
+                })
+
+            # Log focal timeseries
+            focal_rewards = info.get("focal_reward_timeseries", [])
+            focal_uncertainties = info.get("focal_uncertainty_timeseries", [])
+            
+            logger.log_focal_timeseries(
+                focal_rewards,
+                focal_uncertainties,
+                phase="full_run", focal_label=focal_label
+            )
+
+            # Log focal performance delta
+            if focal_rewards and switch_time < len(focal_rewards):
+                before_focal = focal_rewards[:switch_time]
+                after_focal = focal_rewards[switch_time:]
+                if before_focal and after_focal:
+                    avg_before = sum(before_focal) / len(before_focal)
+                    avg_after = sum(after_focal) / len(after_focal)
+                    delta_focal = avg_after - avg_before
+                    if logger.use_wandb:
+                        import wandb
+                        wandb.log({f"focal/{focal_label}/performance_delta": delta_focal})
+                    print(f"Focal Performance Delta: {delta_focal:.4f}")
+            logger.log_faceted_ternary_plot(plot_data_before, plot_data_after, cfg.resolution, vmin=0.3, vmax=0.7)
+            logger.log_ternary_plot(
+                plot_data_delta, 
+                cfg.resolution, 
+                midpoint=0.0, 
+                vmin=-0.4, 
+                vmax=0.4, 
+                key="ternary_delta_landscape"
+            )
+    else:
+        print(f"Starting simulation (Internal Switch: {env_switch}, Switch Time: {switch_time})...")
+        with torch.no_grad():
+            full_fitness_tensor, info = evaluator.evaluate(
+                env, all_islands, max_steps=cfg.max_steps,
+                return_info=True, focal_indices=focal_flat_indices
+            )
+            plot_data = process_fitness(full_fitness_tensor, cfg.max_steps)
+            
+            # Log full timeseries
+            logger.log_focal_timeseries(
+                info.get("focal_reward_timeseries", []),
+                info.get("focal_uncertainty_timeseries", []),
+                phase="full_run", focal_label=focal_label
+            )
+
+        logger.log_ternary_plot(plot_data, cfg.resolution, vmin=0.3, vmax=0.8)
 
     env.close()
-
-    # We only care about the first 'num_actual_sims' rows
-    fitness_tensor = full_fitness_tensor[:num_actual_sims]
-    env_scores = fitness_tensor.mean(dim=1).cpu().numpy()
-    results_map = {} # Key: (p_p, p_b, p_n), Value: list of scores
-
-    for idx, score in enumerate(env_scores):
-        config_idx = idx // cfg.replicates
-        config = simplex_points[config_idx]
-
-        if config not in results_map:
-            results_map[config] = []
-        results_map[config].append(score)
-
-    # Calculate average fitness for each unique config
-    plot_data = []
-    midpoint = None
-    target_p_priv = 0.33
-    target_p_none = 0.33
-    
-    best_dist = float('inf')
-    chosen_config = None
-
-    max_possible_score = cfg.max_steps * 1.75 if cfg.targets_quality == "HT" else cfg.max_steps
-    for config, scores in results_map.items():
-        avg_score = np.mean(scores) / max_possible_score
-        p_p, p_y, p_n = config
-        
-        plot_data.append({
-            'priv': p_p,
-            'bel': p_y, # Represents channel_y
-            'none': p_n,
-            'score': avg_score
-        })
-
-        # Find closest point to target (priv=0.1, none=0.9, belief=0.0)
-        dist = math.sqrt((p_p - target_p_priv)**2 + (p_n - target_p_none)**2)
-        if dist < best_dist:
-            best_dist = dist
-            midpoint = None # avg_score
-            chosen_config = config
-    
-    logger.log_ternary_plot(plot_data, cfg.resolution, midpoint=midpoint)
     logger.finish()
 
 if __name__ == "__main__":

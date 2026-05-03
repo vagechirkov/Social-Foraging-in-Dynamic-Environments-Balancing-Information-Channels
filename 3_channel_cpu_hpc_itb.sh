@@ -7,7 +7,7 @@
 #SBATCH --nodes=1                                   # Ensure it runs on one node
 #SBATCH --ntasks=1                                  # Run a single task
 #SBATCH --cpus-per-task=20                          # Request 64 CPUs
-#SBATCH --mem=125G                                  # Memory allocation
+#SBATCH --mem=256G                                  # Memory allocation
 
 
 source .venv/bin/activate
@@ -34,15 +34,17 @@ cost_consensus=${16}
 consensus_selectivity_threshold=${17}
 channel_y_name=${18}
 bias_magnitude=${19}
-spot_radius=${20}
+spot_radius=${20}2
 category_name=${21}
 target_qualities=${22}
+env_switch=${23:-False}
+switch_time=${24:-500}
 
 python abm/3_channels_abm_exploration.py \
     --m n_agents="$n_agents" \
     n_targets="$n_targets" \
-    max_steps=1000 \
-    replicates=100 \
+    max_steps=999 \
+    replicates=200 \
     run_name="$category_name" \
     target_speed="$t_speed" \
     cost_priv="$cost_priv" \
@@ -64,6 +66,8 @@ python abm/3_channels_abm_exploration.py \
     channel_y_name="$channel_y_name" \
     bias_magnitude="$bias_magnitude" \
     spot_radius="$spot_radius" \
-    +target_qualities="$target_qualities" \
-    +decision_making="greedy" \
-    +p_spatial_explore=0.01
+    ++target_qualities="$target_qualities" \
+    ++decision_making="greedy" \
+    ++p_spatial_explore=0.01 \
+    ++env_switch="$env_switch" \
+    ++switch_time="$switch_time"

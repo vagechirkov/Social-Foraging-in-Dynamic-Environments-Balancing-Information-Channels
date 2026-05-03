@@ -41,6 +41,10 @@ p_belief = st.sidebar.slider("P(Belief)", 0.0, 1.0, 0.6)
 # p_consensus = st.sidebar.slider("P(Consensus)", 0.0, 1.0, 0.0)
 p_consensus = 0.0
 
+st.sidebar.markdown("---")
+env_switch = st.sidebar.toggle("Enable Periodic Switch", value=False)
+switch_time = st.sidebar.slider("Switch Interval (Steps)", 10, 2000, 500)
+
 target_pattern = st.sidebar.selectbox("Target Movement Pattern", ["crw", "periodically_relocate", "levy"], index=0)
 if target_pattern == "periodically_relocate":
     relocation_interval = st.sidebar.slider("Relocation Interval", 50, 1000, 250)
@@ -89,7 +93,7 @@ def reset_simulation():
         'dist_noise_scale_soc': 0,
         'social_trans_scale': 0.01,
         'belief_selectivity_threshold': 0.1,
-        'process_noise_scale': 0.05, 
+        'process_noise_scale': 0.01, 
         'cost_priv': 0.0,
         'cost_belief': 0.0,
         'base_noise': 0.1,
@@ -106,6 +110,8 @@ def reset_simulation():
         'p_spatial_explore': p_spatial_explore,
         'spot_radius': spot_radius,
         'channel_y_name': "Belief",
+        'env_switch': env_switch,
+        'switch_time': switch_time,
     }
     env = VmasEnv(scenario=Scenario(), num_envs=1, device="cpu", **params)
     env.reset()

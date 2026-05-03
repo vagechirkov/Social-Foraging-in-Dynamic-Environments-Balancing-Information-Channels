@@ -55,6 +55,10 @@ class Scenario(BaseScenario):
         self.target_movement_pattern = None
         self.relocation_interval = None
 
+        self.env_switch = False
+        self.switch_time = None
+        self.current_t = 0
+
     def make_world(self, batch_dim: int, device: torch.device, **kwargs):
         self.is_interactive = kwargs.pop("is_interactive", False)
 
@@ -73,6 +77,11 @@ class Scenario(BaseScenario):
         self.target_persistence = kwargs.pop("target_persistence", 20)
         self.target_movement_pattern = kwargs.pop("target_movement_pattern", "crw")
         self.relocation_interval = kwargs.pop("relocation_interval", 100)
+
+        # periodic switch
+        self.env_switch = kwargs.pop("env_switch", False)
+        self.switch_time = kwargs.pop("switch_time", 500)
+        self.current_t = 0
 
         # agents
         self.n_agents = kwargs.pop("n_agents", 5)
@@ -250,6 +259,12 @@ class Scenario(BaseScenario):
         return torch.zeros(agent.batch_dim, 2, device=agent.device)
 
     def process_action(self, agent: Agent):
+        if agent == self.world.agents[0]:
+            self.current_t += 1
+            if self.env_switch and self.switch_time is not None and self.switch_time > 0:
+                if self.current_t % self.switch_time == 0:
+                    self.internal_swap_qualities()
+
         if self.is_interactive:
             probs = torch.zeros(6)
             probs[0] = 0.5 # 0.0 if 'agent_0' in agent.name else 1.0 # Private
@@ -271,6 +286,25 @@ class Scenario(BaseScenario):
             compute_reward(agent, targets)
         elif isinstance(agent, TargetAgent):
             agent.update_state_based_on_action(agent, self.world)
+
+    def internal_swap_qualities(self):
+        if len(self.target_agents) < 2:
+            return
+        
+        # Surgical swap of the quality tensors for the first two targets
+        # quality is a tensor of shape (batch_dim,)
+        q0 = self.target_agents[0].quality.clone()
+        q1 = self.target_agents[1].quality.clone()
+        
+        self.target_agents[0].quality.copy_(q1)
+        self.target_agents[1].quality.copy_(q0)
+        
+        # Also update the shape radius if it depends on quality
+        # targets[i].shape._radius = self.agent_radius * targets[i].quality * 4
+        # Note: in VMAS, changing radius mid-sim might not update the spatial hash 
+        # unless handled, but here it's mostly for rendering/reward.
+        for i in range(2):
+            self.target_agents[i].shape._radius = self.agent_radius * self.target_agents[i].quality[0].item() * 4
 
 
     def action_script_creator(self):

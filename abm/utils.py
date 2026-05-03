@@ -1,4 +1,6 @@
 import multiprocessing
+import os
+import functools
 import uuid
 from typing import Any, List, Dict, Optional
 
@@ -11,6 +13,14 @@ from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
 from torchrl.envs import ParallelEnv, TransformedEnv, VmasEnv
 from torchrl.envs.transforms import Transform
+
+def step_tensordict(td: TensorDict) -> TensorDict:
+    """A simple implementation of step_tensordict for older TorchRL versions."""
+    next_td = td.get("next").clone()
+    # Remove 'next' from the sub-tensordict if it exists to avoid recursion
+    if "next" in next_td.keys():
+        next_td.del_("next")
+    return next_td
 
 from .model import Scenario
 from .agent import ForagingAgent, TargetAgent
@@ -177,6 +187,10 @@ class VmasEvaluator:
 
     @staticmethod
     def get_num_workers() -> int:
+        # Respect SLURM allocation if available
+        slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
+        if slurm_cpus:
+            return int(slurm_cpus)
         available_cpus = multiprocessing.cpu_count()
         return max(1, available_cpus)
 
@@ -194,7 +208,7 @@ class VmasEvaluator:
         if self.num_workers > 1 and self.device == "cpu":
             base_env = ParallelEnv(
                 num_workers=self.num_workers,
-                create_env_fn=lambda: self._make_env_fn(self.sub_batch_size)
+                create_env_fn=functools.partial(self._make_env_fn, self.sub_batch_size)
             )
         else:
             base_env = self._make_env_fn(self.total_pop)
@@ -205,7 +219,15 @@ class VmasEvaluator:
         else:
             return base_env
 
-    def evaluate(self, env, islands: List[List[Any]], return_info: bool = False):
+    def evaluate(
+        self, 
+        env, 
+        islands: List[List[Any]], 
+        max_steps: Optional[int] = None,
+        return_info: bool = False,
+        focal_indices: Optional[List[int]] = None,
+        return_rewards_all: bool = False,
+    ):
         # Prepare Genes
         flat_population = [ind for island in islands for ind in island]
         population_genes = torch.tensor(flat_population, dtype=torch.float32, device=self.device)
@@ -245,6 +267,9 @@ class VmasEvaluator:
             device=self.device
         )
 
+        if max_steps is None:
+            max_steps = self.cfg.max_steps
+
         # Policy
         def policy_func(genes_logits):
             dist = torch.distributions.Categorical(logits=genes_logits)
@@ -255,10 +280,12 @@ class VmasEvaluator:
         # Rollout
         with torch.inference_mode():
             env.reset(initial_tensordict)
+            start_td = initial_tensordict
+
             rollouts = env.rollout(
-                max_steps=self.cfg.max_steps,
+                max_steps=max_steps,
                 policy=policy,
-                tensordict=initial_tensordict,
+                tensordict=start_td,
                 auto_reset=True,
                 auto_cast_to_device=True,
             )
@@ -300,7 +327,40 @@ class VmasEvaluator:
                     avg_belief_uncertainty = belief_uncertainty[mask].mean().item()
                 else:
                     avg_belief_uncertainty = 0.0
-                extra_metrics = {"avg_belief_uncertainty": avg_belief_uncertainty}
+                
+                # Get last state for continuing rollouts
+                last_td = step_tensordict(rollouts[..., -1])
+                
+                extra_metrics = {
+                    "avg_belief_uncertainty": avg_belief_uncertainty,
+                    "last_td": last_td
+                }
+
+                if return_rewards_all:
+                    # Flatten batch dimensions for the returned rewards
+                    # Shape: [total_pop, Steps, n_agents, 1]
+                    extra_metrics["rewards_all"] = rewards_all.view(self.total_pop, max_steps, self.cfg.n_agents, 1)
+
+                if focal_indices is not None:
+                    # Flatten batch dims → [total_pop, Steps, n_agents, 1]
+                    r_flat = rewards_all.view(self.total_pop, max_steps, self.cfg.n_agents, 1)
+                    focal_r = r_flat[focal_indices]  # [n_focal, Steps, n_agents, 1]
+                    # Mean over focal envs and agents → [Steps]
+                    focal_reward_ts = focal_r.mean(dim=(0, 2, 3)).cpu().tolist()
+
+                    # belief uncertainty flat: [total_pop, Steps, n_agents]
+                    bu_flat = belief_uncertainty.view(self.total_pop, max_steps, -1)
+                    focal_bu = bu_flat[focal_indices]  # [n_focal, Steps, n_agents]
+                    bu_mask = focal_bu > 0
+                    focal_bu_ts = [
+                        focal_bu[:, s, :][bu_mask[:, s, :]].mean().item()
+                        if bu_mask[:, s, :].any() else 0.0
+                        for s in range(max_steps)
+                    ]
+
+                    extra_metrics["focal_reward_timeseries"] = focal_reward_ts
+                    extra_metrics["focal_uncertainty_timeseries"] = focal_bu_ts
+
             except KeyError:
                 extra_metrics = {}
             return total_rewards, extra_metrics
@@ -319,6 +379,42 @@ class ExperimentLogger:
         self.frozen_indices = frozen_indices if frozen_indices is not None else []
         if self.use_wandb:
             self._init_wandb()
+
+    def log_focal_timeseries(
+        self,
+        reward_ts: list,
+        uncertainty_ts: list,
+        phase: str = "phase_1",
+        focal_label: str = "priv0.4_bel0.6",
+    ):
+        """
+        Logs per-timestep average fitness and belief uncertainty for a focal condition.
+
+        Args:
+            reward_ts: list of float, length = max_steps (avg reward per step)
+            uncertainty_ts: list of float, length = max_steps (avg belief uncertainty per step)
+            phase: label for the phase (e.g. 'phase_1', 'phase_2')
+            focal_label: human-readable label for the focal condition
+        """
+        prefix = f"focal/{focal_label}/{phase}"
+
+        if self.use_wandb:
+            for step, (r, u) in enumerate(zip(reward_ts, uncertainty_ts or [])):
+                wandb.log({
+                    f"{prefix}/avg_fitness": r,
+                    f"{prefix}/belief_uncertainty": u,
+                    f"{prefix}/step": step,
+                })
+        else:
+            # Print summary statistics when not using wandb
+            if reward_ts:
+                print(f"[Focal {focal_label} | {phase}] "
+                      f"Avg fitness: {sum(reward_ts)/len(reward_ts):.4f} | "
+                      f"Final fitness: {reward_ts[-1]:.4f}")
+            if uncertainty_ts:
+                print(f"[Focal {focal_label} | {phase}] "
+                      f"Avg uncertainty: {sum(uncertainty_ts)/len(uncertainty_ts):.4f} | "
+                      f"Final uncertainty: {uncertainty_ts[-1]:.4f}")
 
     def _init_wandb(self):
         wandb.login()
@@ -496,20 +592,52 @@ class ExperimentLogger:
             plt.savefig(f"{prefix_file}parallel_plot_{gen:04d}.png", dpi=150, bbox_inches='tight')
         plt.close(fig)
 
-    def log_ternary_plot(self, plot_data: List[Dict[str, float]], resolution: int, midpoint: Optional[float] = None):
+    def log_ternary_plot(
+        self, 
+        plot_data: List[Dict[str, float]], 
+        resolution: int, 
+        midpoint: Optional[float] = None,
+        key: str = "ternary_landscape",
+        vmin: float = 0.0,
+        vmax: float = 1.0,
+    ):
         """
         Generates and logs a ternary plot (Private vs Belief vs None).
         Expected plot_data structure: [{'priv': 0.1, 'bel': 0.8, 'none': 0.1, 'score': 10.5}, ...]
         """
-        fig = self._generate_ternary_plot_fig(plot_data, resolution, midpoint)
+        fig = self._generate_ternary_plot_fig(plot_data, resolution, midpoint, vmin=vmin, vmax=vmax)
 
         if self.use_wandb:
-            wandb.log({"ternary_landscape": wandb.Image(fig)})
+            wandb.log({key: wandb.Image(fig)})
 
         if self.save_fig:
-            fname = "ternary_exploration.png"
+            fname = f"{key}.png"
             plt.savefig(fname, dpi=150, bbox_inches='tight')
             print(f"Ternary plot saved to {fname}")
+
+        plt.close(fig)
+
+    def log_faceted_ternary_plot(
+        self,
+        plot_data_before: List[Dict[str, float]],
+        plot_data_after: List[Dict[str, float]],
+        resolution: int,
+        key: str = "ternary_switch_landscape",
+        vmin: float = 0.3,
+        vmax: float = 0.8,
+    ):
+        """Generates and logs a faceted ternary plot (Before vs After Switch)."""
+        fig = self._generate_faceted_ternary_plot_fig(
+            plot_data_before, plot_data_after, resolution, vmin=vmin, vmax=vmax
+        )
+
+        if self.use_wandb:
+            wandb.log({key: wandb.Image(fig)})
+
+        if self.save_fig:
+            fname = f"{key}.png"
+            plt.savefig(fname, dpi=150, bbox_inches='tight')
+            print(f"Faceted ternary plot saved to {fname}")
 
         plt.close(fig)
 
@@ -696,7 +824,14 @@ class ExperimentLogger:
         plt.tight_layout()
         return fig
 
-    def _generate_ternary_plot_fig(self, data: List[Dict[str, float]], resolution: int, midpoint: Optional[float] = None):
+    def _generate_ternary_plot_fig(
+        self, 
+        data: List[Dict[str, float]], 
+        resolution: int, 
+        midpoint: Optional[float] = None,
+        vmin: float = 0.0,
+        vmax: float = 1.0,
+    ):
         """
         Internal method to generate the matplotlib figure for the ternary plot using mpltern.
         """
@@ -709,39 +844,72 @@ class ExperimentLogger:
         scores = [item['score'] for item in data]
 
         fig = plt.figure(figsize=(10, 8))
-        # Projection 'ternary' is provided by mpltern
         ax = fig.add_subplot(projection='ternary')
 
-        # Order for mpltern is typically Top, Left, Right
-        # We map:
-        # Top = Belief
-        # Left = Private
-        # Right = None
-
-        # tricontourf(t, l, r, values)
-        #  shading='gouraud', rasterized=True
-        
         cmap = "RdBu_r" if midpoint is not None else "viridis"
-        norm = TwoSlopeNorm(vmin=0, vcenter=midpoint, vmax=1) if midpoint is not None else None
-        
-        if norm is not None:
-            cs = ax.tripcolor(bel, priv, none, scores, cmap=cmap, norm=norm, shading='flat')
+        if midpoint is not None:
+             norm = TwoSlopeNorm(vmin=vmin, vcenter=midpoint, vmax=vmax)
         else:
-            cs = ax.tripcolor(bel, priv, none, scores, cmap=cmap, shading='flat')
-        # ax.grid(alpha=0.2)
+             norm = plt.Normalize(vmin=vmin, vmax=vmax)
+        
+        cs = ax.tripcolor(bel, priv, none, scores, cmap=cmap, norm=norm, shading='flat')
+
         ax.grid(axis='t', color='w')
         ax.grid(axis='l', color='w', linestyle='--')
         ax.grid(axis='r', color='w', linestyle=':')
 
         cax = ax.inset_axes([1.05, 0.1, 0.05, 0.9], transform=ax.transAxes)
-        fig.colorbar(cs, label="Average Fitness", cax=cax)  # , ticks=np.linspace(0, 1, 11)
+        fig.colorbar(cs, label="Average Fitness", cax=cax)
 
         ax.set_tlabel("Belief")
         ax.set_llabel("Private")
         ax.set_rlabel("None")
 
-        # ax.set_title(f"Channel Strategy Fitness Landscape\n(Grid Resolution: {resolution})")
         plt.tight_layout()
+        return fig
+
+    def _generate_faceted_ternary_plot_fig(
+        self,
+        data_before: List[Dict[str, float]],
+        data_after: List[Dict[str, float]],
+        resolution: int,
+        vmin: float = 0.3,
+        vmax: float = 0.8,
+    ):
+        """Generates a side-by-side ternary plot."""
+        import mpltern
+        
+        fig = plt.figure(figsize=(18, 8))
+        
+        datasets = [data_before, data_after]
+        titles = ["Before Switch", "After Switch"]
+        norm = plt.Normalize(vmin=vmin, vmax=vmax)
+        cmap = "viridis"
+        
+        for i, (data, title) in enumerate(zip(datasets, titles)):
+            ax = fig.add_subplot(1, 2, i + 1, projection='ternary')
+            
+            priv = [item['priv'] for item in data]
+            bel = [item['bel'] for item in data]
+            none = [item['none'] for item in data]
+            scores = [item['score'] for item in data]
+            
+            cs = ax.tripcolor(bel, priv, none, scores, cmap=cmap, norm=norm, shading='flat')
+            
+            ax.grid(axis='t', color='w')
+            ax.grid(axis='l', color='w', linestyle='--')
+            ax.grid(axis='r', color='w', linestyle=':')
+            
+            ax.set_tlabel("Belief")
+            ax.set_llabel("Private")
+            ax.set_rlabel("None")
+            ax.set_title(title, fontsize=16)
+
+        # Common Colorbar
+        cax = fig.add_axes([0.93, 0.15, 0.02, 0.7])
+        fig.colorbar(cs, cax=cax, label="Average Fitness")
+        
+        plt.subplots_adjust(wspace=0.3, right=0.9)
         return fig
 
     def finish(self):
