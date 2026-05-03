@@ -21,8 +21,8 @@ n_agent_array = [30]  # Options: 20 30
 
 # Target
 n_targets_array = [2]
-target_qualities_array = ["'[1.0, 0.1]'"] # "'[1.0, 0.01]'",
-target_speed_array = [0.5, 0.7]  # Options: 0.1 0.3 0.5
+target_qualities_array = ["'[1.0, 0.01]'", "'[1.0, 0.1]'"] # "'[1.0, 0.01]'",
+target_speed_array = [0.5]  # Options: 0.1 0.3 0.5
 target_persistence_array = [20]
 relocation_interval_array = [1000]
 
@@ -33,14 +33,15 @@ cost_consensus_array = [0.0]
 
 # Noise
 base_noise_array = [0.1]
-dist_noise_scale_priv_array = [0.05, 0.1]  # 0.5 1.0
-process_noise_scale_array = [0.05, 0.01]  # 0.1 0.5 1.0
+dist_noise_scale_priv_array = [0.05]  # 0.5 1.0
+process_noise_scale_array = [0.05, 0.025]  # 0.1 0.5 1.0
 process_noise_scale_het_ratio_array = [0]  # 0.5 0.2 0.8
 process_noise_scale_het_scale_array = [10]  # 100
 bias_magnitude_array = [0.0]
 spot_radius_array = [0.25]  # , 0.5, 0.75, 1.0
 env_switch_array = [True]
-switch_time_array = [500]
+switch_time_array = [1000]
+p_spatial_explore_array = [0.0]
 
 def submit_jobs(dry_run=False):
     # Create all combinations
@@ -72,7 +73,8 @@ def submit_jobs(dry_run=False):
         spot_radius_array,
         target_qualities_array,
         env_switch_array,
-        switch_time_array
+        switch_time_array,
+        p_spatial_explore_array
     )
 
     count = 0
@@ -98,7 +100,8 @@ def submit_jobs(dry_run=False):
         spot_radius,
         target_qualities,
         env_switch,
-        switch_time
+        switch_time,
+        p_spatial_explore
     ) in combinations:
         
         count += 1
@@ -152,7 +155,8 @@ def submit_jobs(dry_run=False):
             "heterogeneous_switch",
             str(target_qualities),
             str(env_switch),
-            str(switch_time)
+            str(switch_time),
+            str(p_spatial_explore)
         ]
         
         cmd = ["sbatch", "3_channel_cpu_hpc_itb.sh"] + args

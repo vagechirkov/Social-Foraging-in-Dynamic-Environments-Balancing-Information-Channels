@@ -156,18 +156,28 @@ def run_exploration(cfg: DictConfig):
 
     print("Starting simulation...")
 
-    # Focal condition: closest grid point to (p_priv≈0.4, p_bel≈0.6)
-    FOCAL_PRIV, FOCAL_BEL = 0.4, 0.6
-    focal_config_idx = min(
-        range(len(simplex_points)),
-        key=lambda i: abs(simplex_points[i][0] - FOCAL_PRIV) + abs(simplex_points[i][1] - FOCAL_BEL)
-    )
-    focal_config = simplex_points[focal_config_idx]
-    focal_flat_indices = list(range(focal_config_idx * cfg.replicates,
-                                    (focal_config_idx + 1) * cfg.replicates))
-    focal_label = f"priv{focal_config[0]:.2f}_bel{focal_config[1]:.2f}"
-    print(f"Focal condition: priv={focal_config[0]:.2f}, bel={focal_config[1]:.2f}, "
-          f"none={focal_config[2]:.2f} | flat env indices {focal_flat_indices[0]}–{focal_flat_indices[-1]}")
+    # 3. Define Focal Conditions to Track
+    focal_definitions = [
+        {"name": "social_mix", "p_priv": 0.4, "p_bel": 0.6},
+        {"name": "asocial", "p_priv": 1.0, "p_bel": 0.0},
+    ]
+    
+    focal_configs = []
+    for f_def in focal_definitions:
+        idx = min(
+            range(len(simplex_points)),
+            key=lambda i: abs(simplex_points[i][0] - f_def["p_priv"]) + abs(simplex_points[i][1] - f_def["p_bel"])
+        )
+        config = simplex_points[idx]
+        flat_indices = list(range(idx * cfg.replicates, (idx + 1) * cfg.replicates))
+        label = f"{f_def['name']}_p{config[0]:.2f}_b{config[1]:.2f}"
+        focal_configs.append({
+            "indices": flat_indices,
+            "label": label,
+            "config": config
+        })
+        print(f"Focal condition [{f_def['name']}]: priv={config[0]:.2f}, bel={config[1]:.2f}, none={config[2]:.2f} | "
+              f"indices {flat_indices[0]}–{flat_indices[-1]}")
 
     # 4. Evaluate
     env_switch = getattr(cfg, "env_switch", False) and cfg.n_targets == 2
@@ -206,11 +216,13 @@ def run_exploration(cfg: DictConfig):
         with torch.no_grad():
             full_fitness_tensor, info = evaluator.evaluate(
                 env, all_islands, max_steps=cfg.max_steps,
-                return_info=True, focal_indices=focal_flat_indices,
-                return_rewards_all=True
+                return_info=True, 
+                return_rewards_all=True,
+                return_uncertainty_all=True
             )
             
-            rewards_all = info["rewards_all"] # [TotalPop, Steps, Agents, 1]
+            rewards_all = info["rewards_all"]
+            uncertainty_all = info["uncertainty_all"]
             
             # Split and sum rewards over the time dimension
             # Shape: [TotalPop, Agents]
@@ -220,7 +232,7 @@ def run_exploration(cfg: DictConfig):
             plot_data_before = process_fitness(fitness_1, switch_time)
             plot_data_after = process_fitness(fitness_2, cfg.max_steps - switch_time)
             
-            # Calculate Performance Delta
+            # Calculate Performance Delta Landscape
             plot_data_delta = []
             for b, a in zip(plot_data_before, plot_data_after):
                 plot_data_delta.append({
@@ -230,28 +242,47 @@ def run_exploration(cfg: DictConfig):
                     'score': a['score'] - b['score']
                 })
 
-            # Log focal timeseries
-            focal_rewards = info.get("focal_reward_timeseries", [])
-            focal_uncertainties = info.get("focal_uncertainty_timeseries", [])
+            # Aggregate all step-based metrics for focal conditions
+            all_step_metrics = [{} for _ in range(cfg.max_steps)]
             
-            logger.log_focal_timeseries(
-                focal_rewards,
-                focal_uncertainties,
-                phase="full_run", focal_label=focal_label
-            )
-
-            # Log focal performance delta
-            if focal_rewards and switch_time < len(focal_rewards):
-                before_focal = focal_rewards[:switch_time]
-                after_focal = focal_rewards[switch_time:]
+            for f_conf in focal_configs:
+                indices = f_conf["indices"]
+                label = f_conf["label"]
+                
+                # Extract reward timeseries
+                focal_r = rewards_all[indices]
+                focal_reward_ts = focal_r.mean(dim=(0, 2, 3)).cpu().tolist()
+                
+                # Extract uncertainty timeseries
+                focal_u = uncertainty_all[indices]
+                u_mask = focal_u > 0
+                focal_bu_ts = [
+                    focal_u[:, s, :][u_mask[:, s, :]].mean().item()
+                    if u_mask[:, s, :].any() else 0.0
+                    for s in range(cfg.max_steps)
+                ]
+                
+                prefix = f"focal/{label}/full_run"
+                for i in range(cfg.max_steps):
+                    all_step_metrics[i][f"{prefix}/avg_fitness"] = focal_reward_ts[i]
+                    all_step_metrics[i][f"{prefix}/belief_uncertainty"] = focal_bu_ts[i]
+                
+                # Log focal performance delta over time (Phase 2 - Phase 1)
+                before_focal = focal_reward_ts[:switch_time]
+                after_focal = focal_reward_ts[switch_time:]
                 if before_focal and after_focal:
-                    avg_before = sum(before_focal) / len(before_focal)
-                    avg_after = sum(after_focal) / len(after_focal)
-                    delta_focal = avg_after - avg_before
-                    if logger.use_wandb:
-                        import wandb
-                        wandb.log({f"focal/{focal_label}/performance_delta": delta_focal})
-                    print(f"Focal Performance Delta: {delta_focal:.4f}")
+                    min_len = min(len(before_focal), len(after_focal))
+                    for i in range(min_len):
+                        delta = after_focal[i] - before_focal[i]
+                        all_step_metrics[i][f"focal/{label}/performance_delta_ts"] = delta
+            
+            # Log to WandB once per step to keep steps monotonic
+            if logger.use_wandb:
+                import wandb
+                for i, metrics in enumerate(all_step_metrics):
+                    wandb.log(metrics, step=i)
+            print(f"Logged synchronized focal metrics for {len(focal_configs)} conditions.")
+
             logger.log_faceted_ternary_plot(plot_data_before, plot_data_after, cfg.resolution, vmin=0.3, vmax=0.7)
             logger.log_ternary_plot(
                 plot_data_delta, 
@@ -266,16 +297,45 @@ def run_exploration(cfg: DictConfig):
         with torch.no_grad():
             full_fitness_tensor, info = evaluator.evaluate(
                 env, all_islands, max_steps=cfg.max_steps,
-                return_info=True, focal_indices=focal_flat_indices
+                return_info=True,
+                return_rewards_all=True,
+                return_uncertainty_all=True
             )
             plot_data = process_fitness(full_fitness_tensor, cfg.max_steps)
             
-            # Log full timeseries
-            logger.log_focal_timeseries(
-                info.get("focal_reward_timeseries", []),
-                info.get("focal_uncertainty_timeseries", []),
-                phase="full_run", focal_label=focal_label
-            )
+            rewards_all = info["rewards_all"]
+            uncertainty_all = info["uncertainty_all"]
+
+            # Aggregate all step-based metrics
+            all_step_metrics = [{} for _ in range(cfg.max_steps)]
+
+            # Log all focal timeseries
+            for f_conf in focal_configs:
+                indices = f_conf["indices"]
+                label = f_conf["label"]
+                
+                focal_r = rewards_all[indices]
+                focal_reward_ts = focal_r.mean(dim=(0, 2, 3)).cpu().tolist()
+                
+                focal_u = uncertainty_all[indices]
+                u_mask = focal_u > 0
+                focal_bu_ts = [
+                    focal_u[:, s, :][u_mask[:, s, :]].mean().item()
+                    if u_mask[:, s, :].any() else 0.0
+                    for s in range(cfg.max_steps)
+                ]
+                
+                prefix = f"focal/{label}/full_run"
+                for i in range(cfg.max_steps):
+                    all_step_metrics[i][f"{prefix}/avg_fitness"] = focal_reward_ts[i]
+                    all_step_metrics[i][f"{prefix}/belief_uncertainty"] = focal_bu_ts[i]
+
+            # Log to WandB once per step to keep steps monotonic
+            if logger.use_wandb:
+                import wandb
+                for i, metrics in enumerate(all_step_metrics):
+                    wandb.log(metrics, step=i)
+            print(f"Logged synchronized focal metrics for {len(focal_configs)} conditions.")
 
         logger.log_ternary_plot(plot_data, cfg.resolution, vmin=0.3, vmax=0.8)
 

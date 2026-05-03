@@ -227,6 +227,7 @@ class VmasEvaluator:
         return_info: bool = False,
         focal_indices: Optional[List[int]] = None,
         return_rewards_all: bool = False,
+        return_uncertainty_all: bool = False,
     ):
         # Prepare Genes
         flat_population = [ind for island in islands for ind in island]
@@ -341,6 +342,10 @@ class VmasEvaluator:
                     # Shape: [total_pop, Steps, n_agents, 1]
                     extra_metrics["rewards_all"] = rewards_all.view(self.total_pop, max_steps, self.cfg.n_agents, 1)
 
+                if return_uncertainty_all:
+                    # Shape: [total_pop, Steps, n_agents]
+                    extra_metrics["uncertainty_all"] = belief_uncertainty.view(self.total_pop, max_steps, -1)
+
                 if focal_indices is not None:
                     # Flatten batch dims → [total_pop, Steps, n_agents, 1]
                     r_flat = rewards_all.view(self.total_pop, max_steps, self.cfg.n_agents, 1)
@@ -402,9 +407,8 @@ class ExperimentLogger:
             for step, (r, u) in enumerate(zip(reward_ts, uncertainty_ts or [])):
                 wandb.log({
                     f"{prefix}/avg_fitness": r,
-                    f"{prefix}/belief_uncertainty": u,
-                    f"{prefix}/step": step,
-                })
+                    f"{prefix}/belief_uncertainty": u
+                }, step=step)
         else:
             # Print summary statistics when not using wandb
             if reward_ts:
