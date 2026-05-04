@@ -24,6 +24,7 @@ ssga:
   cull_fraction: 0.15
   mutation_prob: 0.6
   mutation_sigma: 0.1
+  mls: False
 
 # Environment & Physics
 x_dim: 2

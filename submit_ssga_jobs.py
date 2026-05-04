@@ -10,7 +10,7 @@ def submit_ssga_jobs():
     # Define parameter ranges
     switch_times = [1000, 20000, 50000]
     cull_fractions = [0.2]
-    n_agents_list = [60]  # , 10, 60
+    n_agents_list = [30]  # , 10, 60
     history_reset_list = [False]  # True, 
     mls_list = [False, True]
 
