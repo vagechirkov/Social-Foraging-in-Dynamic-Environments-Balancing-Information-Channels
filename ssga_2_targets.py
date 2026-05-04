@@ -172,6 +172,16 @@ def run_ssga(cfg: DictConfig):
             env.base_env.scenario.reinitialize_agents(newborn_mask)
             
             total_ticks += eval_interval
+            
+            # 5. History Reset Condition
+            if getattr(cfg, "history_reset", False) and total_ticks > 0 and total_ticks % cfg.switch_time == 0:
+                print(f"[{total_ticks}] Performing history reset...")
+                last_td = env.reset(TensorDict({"genes": genes}, batch_size=batch_size_shape, device=device))
+
+            # Clean up memory from the large rollout before the next iteration
+            del rollouts, rewards
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     print("Simulation Complete.")
     env.close()

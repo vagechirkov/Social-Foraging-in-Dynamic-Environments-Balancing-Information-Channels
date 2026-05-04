@@ -16,10 +16,11 @@ max_ticks: 100000000   # Total simulation ticks
 # Punctuated Shift
 env_switch: True
 switch_time: 10000
+history_reset: False
 
 # SSGA Parameters
 ssga:
-  eval_interval: 500
+  eval_interval: 1000
   cull_fraction: 0.15
   mutation_prob: 0.6
   mutation_sigma: 0.1

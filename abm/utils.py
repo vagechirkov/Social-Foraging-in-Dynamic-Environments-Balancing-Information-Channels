@@ -632,6 +632,16 @@ class ExperimentLogger:
         metrics[f"{prefix}hist/eve"] = wandb.Histogram(flat_eve)
         for i in range(3):
             metrics[f"{prefix}hist/prob_{CHANNEL_NAMES[i]}"] = wandb.Histogram(flat_probs[:, i])
+
+        # Group Histograms (Aggregated over groups/islands)
+        group_fit = interval_fitness.mean(dim=1).cpu().numpy()
+        group_probs = probs.mean(dim=1).cpu().numpy()
+        group_eve = eve_val.mean(dim=1).flatten().cpu().numpy()
+
+        metrics[f"{prefix}hist/group_fitness"] = wandb.Histogram(group_fit)
+        metrics[f"{prefix}hist/group_eve"] = wandb.Histogram(group_eve)
+        for i in range(3):
+            metrics[f"{prefix}hist/group_prob_{CHANNEL_NAMES[i]}"] = wandb.Histogram(group_probs[:, i])
         
         wandb.log(metrics, step=step)
         
