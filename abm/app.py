@@ -39,6 +39,7 @@ p_none = st.sidebar.slider("P(None)", 0.0, 1.0, 0.0)
 p_private = st.sidebar.slider("P(Private)", 0.0, 1.0, 0.4)
 p_belief = st.sidebar.slider("P(Belief)", 0.0, 1.0, 0.6)
 # p_consensus = st.sidebar.slider("P(Consensus)", 0.0, 1.0, 0.0)
+process_noise_scale = st.sidebar.slider("Process Noise Scale", 0.001, 0.06, 0.05)
 p_consensus = 0.0
 
 st.sidebar.markdown("---")
@@ -92,8 +93,8 @@ def reset_simulation():
         'dist_noise_scale_priv': 0.05,
         'dist_noise_scale_soc': 0,
         'social_trans_scale': 0.01,
-        'belief_selectivity_threshold': 0.1,
-        'process_noise_scale': 0.01, 
+        'belief_selectivity_threshold': 0.25,
+        'process_noise_scale': process_noise_scale, 
         'cost_priv': 0.0,
         'cost_belief': 0.0,
         'base_noise': 0.1,
@@ -192,9 +193,16 @@ if st.session_state.env is not None:
             
             # Sample for all FORAGING agents
             foraging_actions = torch.distributions.Categorical(probs=probs).sample((n_agents,))
+            # Action size must be 2: [channel_index, process_noise_scale]
+            foraging_actions_2d = torch.stack([
+                foraging_actions.float(), 
+                torch.full((n_agents,), process_noise_scale)
+            ], dim=-1)
+            
             # Dummies for TARGET agents (they are also in the environment's agents list)
-            target_actions = torch.zeros(n_targets, dtype=torch.long)
-            all_actions = torch.cat([foraging_actions, target_actions])
+            target_actions_2d = torch.zeros((n_targets, 2))
+            
+            all_actions = torch.cat([foraging_actions_2d, target_actions_2d], dim=0)
             
             td = TensorDict({"agents": TensorDict({"action": all_actions.unsqueeze(0)}, 
                             batch_size=[1, n_agents + n_targets])}, batch_size=[1])

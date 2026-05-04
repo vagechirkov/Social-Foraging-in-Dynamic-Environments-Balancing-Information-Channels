@@ -120,7 +120,7 @@ uv run pytest
 To run the interactive visualization:
 ```bash
 PYTHONPATH=.
-uv run streamlit run abm/app.py
+uv run --extra cu124 streamlit run abm/app.py
 ```
 
 ## Environment Optimization
