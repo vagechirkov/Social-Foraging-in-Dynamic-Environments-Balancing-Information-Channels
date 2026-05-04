@@ -12,6 +12,7 @@ def submit_ssga_jobs():
     cull_fractions = [0.2]
     n_agents_list = [60]  # , 10, 60
     history_reset_list = [False]  # True, 
+    mls_list = [False, True]
 
     sbatch_script = "ssga_gpu_hpc_scioi.sh"
 
@@ -20,13 +21,14 @@ def submit_ssga_jobs():
     print(f"Cull fractions: {cull_fractions}")
     print(f"N agents: {n_agents_list}")
     print(f"History reset: {history_reset_list}")
+    print(f"MLS: {mls_list}")
     print(f"Using submit script: {sbatch_script}")
 
-    combinations = list(itertools.product(n_agents_list, switch_times, cull_fractions, history_reset_list))
+    combinations = list(itertools.product(n_agents_list, switch_times, cull_fractions, history_reset_list, mls_list))
     print(f"Total jobs: {len(combinations)}")
 
-    for n_agents, switch_time, cull_frac, history_reset in combinations:
-        run_name = f"ssga_st{switch_time}_cf{cull_frac}_nag{n_agents}_hr{history_reset}"
+    for n_agents, switch_time, cull_frac, history_reset, mls in combinations:
+        run_name = f"ssga_st{switch_time}_cf{cull_frac}_nag{n_agents}_hr{history_reset}_mls{mls}"
         
         cmd = [
             "sbatch", 
@@ -36,6 +38,7 @@ def submit_ssga_jobs():
             f"n_agents={n_agents}",
             f"history_reset={history_reset}",
             f"run_name={run_name}",
+            f"ssga.mls={mls}",
             f"use_gpu=True",
             f"max_ticks={200_000}"
         ]

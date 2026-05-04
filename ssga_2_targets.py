@@ -166,9 +166,25 @@ def run_ssga(cfg: DictConfig):
             
             # Scatter cloned genes into bottom indices
             genes.scatter_(1, bottom_indices.unsqueeze(-1).expand(-1, -1, N_GENES), cloned_genes)
+            
+            # 4. Multi-Level Selection (MLS)
+            if getattr(cfg.ssga, "mls", False):
+                island_fitness = interval_fitness.mean(dim=1) # [Islands]
+                _, sort_island_indices = torch.sort(island_fitness, descending=True)
+                n_half = n_islands // 2
+                
+                top_islands = sort_island_indices[:n_half]
+                bottom_islands = sort_island_indices[-n_half:]
+                
+                # Replace bottom islands with clones of top islands
+                genes[bottom_islands] = genes[top_islands].clone()
+                
+                # Mark all agents in bottom islands as newborns so they get reset
+                newborn_mask[bottom_islands, :] = True
+
             last_td["genes"] = genes
             
-            # 4. Partial Reinitialization in model.py
+            # 5. Partial Reinitialization in model.py
             env.base_env.scenario.reinitialize_agents(newborn_mask)
             
             total_ticks += eval_interval
