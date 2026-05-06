@@ -57,6 +57,7 @@ class Scenario(BaseScenario):
 
         self.env_switch = False
         self.switch_time = None
+        self.switch_target_speed = False
         self.current_t = 0
 
     def make_world(self, batch_dim: int, device: torch.device, **kwargs):
@@ -81,6 +82,7 @@ class Scenario(BaseScenario):
         # periodic switch
         self.env_switch = kwargs.pop("env_switch", False)
         self.switch_time = kwargs.pop("switch_time", 500)
+        self.switch_target_speed = kwargs.pop("switch_target_speed", False)
         self.current_t = 0
 
         # agents
@@ -302,6 +304,15 @@ class Scenario(BaseScenario):
         
         self.target_agents[0].quality.copy_(q1)
         self.target_agents[1].quality.copy_(q0)
+
+        if self.switch_target_speed and self.target_speeds is not None and len(self.target_speeds) >= 2:
+            s0 = self.target_agents[0].max_speed
+            s1 = self.target_agents[1].max_speed
+            self.target_agents[0].max_speed = s1
+            self.target_agents[1].max_speed = s0
+
+            # Also swap in the list for belief updates
+            self.target_speeds[0], self.target_speeds[1] = self.target_speeds[1], self.target_speeds[0]
         
         # Also update the shape radius if it depends on quality
         # targets[i].shape._radius = self.agent_radius * targets[i].quality * 4

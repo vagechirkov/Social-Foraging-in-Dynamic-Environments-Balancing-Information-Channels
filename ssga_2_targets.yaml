@@ -9,13 +9,14 @@ eve_min: 0.01
 eve_max: 0.1
 init_strategy: "middle"
 
-n_envs: 5000        # Number of islands (replicates)
+n_envs: 2500        # Number of islands (replicates)
 n_agents: 30       # Agents per island
 max_ticks: 100000000   # Total simulation ticks
 
 # Punctuated Shift
 env_switch: True
 switch_time: 10000
+switch_target_speed: False
 history_reset: False
 
 # SSGA Parameters
@@ -45,9 +46,10 @@ target_speed: 0.5
 target_persistence: 20
 targets_quality: "HM"
 target_qualities: [1.0, 0.01]
+target_speeds: [0.5, 0.7]
 target_movement_pattern: "crw"
 relocation_interval: 100000000000
 
 # Costs (Energy)
-cost_priv: 0.05
-cost_belief: 0.005
+cost_priv: 0.1
+cost_belief: 0.1
