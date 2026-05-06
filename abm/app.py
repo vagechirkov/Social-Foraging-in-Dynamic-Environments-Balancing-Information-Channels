@@ -39,7 +39,7 @@ p_none = st.sidebar.slider("P(None)", 0.0, 1.0, 0.0)
 p_private = st.sidebar.slider("P(Private)", 0.0, 1.0, 0.4)
 p_belief = st.sidebar.slider("P(Belief)", 0.0, 1.0, 0.6)
 # p_consensus = st.sidebar.slider("P(Consensus)", 0.0, 1.0, 0.0)
-process_noise_scale = st.sidebar.slider("Process Noise Scale", 0.001, 0.06, 0.05)
+process_noise_scale = st.sidebar.slider("Process Noise Scale", 0.001, 0.1, 0.05)
 p_consensus = 0.0
 
 st.sidebar.markdown("---")
