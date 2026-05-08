@@ -12,7 +12,11 @@ def submit_ssga_jobs():
     cull_fractions = [0.2]
     n_agents_list = [30]  # , 10, 60
     history_reset_list = [False]  # True, 
-    mls_list = [False, True]
+    mls_list = [False] # , True
+    scenario_types = ["one_close_one_far"]
+    env_dims = [5]
+    close_target_indices = [0, 1]
+    respawn_modes = ["group_center"]  #, "random" 
 
     sbatch_script = "ssga_gpu_hpc_scioi.sh"
 
@@ -24,11 +28,11 @@ def submit_ssga_jobs():
     print(f"MLS: {mls_list}")
     print(f"Using submit script: {sbatch_script}")
 
-    combinations = list(itertools.product(n_agents_list, switch_times, cull_fractions, history_reset_list, mls_list))
+    combinations = list(itertools.product(n_agents_list, switch_times, cull_fractions, history_reset_list, mls_list, scenario_types, env_dims, close_target_indices, respawn_modes))
     print(f"Total jobs: {len(combinations)}")
 
-    for n_agents, switch_time, cull_frac, history_reset, mls in combinations:
-        run_name = f"ssga_st{switch_time}_cf{cull_frac}_nag{n_agents}_hr{history_reset}_mls{mls}"
+    for n_agents, switch_time, cull_frac, history_reset, mls, scenario_type, env_dim, close_target_idx, respawn_mode in combinations:
+        run_name = f"ssga_st{switch_time}_cf{cull_frac}_nag{n_agents}_hr{history_reset}_mls{mls}_sc{scenario_type}_ed{env_dim}_cti{close_target_idx}_rm{respawn_mode}"
         
         cmd = [
             "sbatch", 
@@ -39,6 +43,11 @@ def submit_ssga_jobs():
             f"history_reset={history_reset}",
             f"run_name={run_name}",
             f"ssga.mls={mls}",
+            f"scenario_type={scenario_type}",
+            f"close_target_index={close_target_idx}",
+            f"respawn_mode={respawn_mode}",
+            f"x_dim={env_dim}",
+            f"y_dim={env_dim}",
             f"use_gpu=True",
             f"max_ticks={200_000}"
         ]

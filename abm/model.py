@@ -59,6 +59,10 @@ class Scenario(BaseScenario):
         self.switch_time = None
         self.switch_target_speed = False
         self.current_t = 0
+        
+        self.scenario_type = None
+        self.close_target_index = 0
+        self.respawn_mode = "group_center"
 
     def make_world(self, batch_dim: int, device: torch.device, **kwargs):
         self.is_interactive = kwargs.pop("is_interactive", False)
@@ -84,6 +88,11 @@ class Scenario(BaseScenario):
         self.switch_time = kwargs.pop("switch_time", 500)
         self.switch_target_speed = kwargs.pop("switch_target_speed", False)
         self.current_t = 0
+        
+        # scenario
+        self.scenario_type = kwargs.pop("scenario_type", None)
+        self.close_target_index = kwargs.pop("close_target_index", 0)
+        self.respawn_mode = kwargs.pop("respawn_mode", "group_center")
 
         # agents
         self.n_agents = kwargs.pop("n_agents", 5)
@@ -205,16 +214,77 @@ class Scenario(BaseScenario):
         return world
 
     def reset_world_at(self, env_index: int = None):
-        ScenarioUtils.spawn_entities_randomly(
-            entities=self.world.agents,
-            world=self.world,
-            env_index=env_index,
-            min_dist_between_entities=self.min_dist_between_entities,
-            x_bounds=(-self.world.x_semidim * self.initialization_box_ratio,
-                      self.world.x_semidim * self.initialization_box_ratio),
-            y_bounds=(-self.world.y_semidim * self.initialization_box_ratio,
-                      self.world.y_semidim * self.initialization_box_ratio),
-        )
+        if self.scenario_type == "one_close_one_far":
+            # Bottom left box
+            bl_x_bounds = (-self.world.x_semidim * 0.95, -self.world.x_semidim * 0.6)
+            bl_y_bounds = (-self.world.y_semidim * 0.95, -self.world.y_semidim * 0.6)
+            
+            # Top right box
+            tr_x_bounds = (self.world.x_semidim * 0.6, self.world.x_semidim * 0.95)
+            tr_y_bounds = (self.world.y_semidim * 0.6, self.world.y_semidim * 0.95)
+
+            ScenarioUtils.spawn_entities_randomly(
+                entities=self.foraging_agents,
+                world=self.world,
+                env_index=env_index,
+                min_dist_between_entities=self.min_dist_between_entities,
+                x_bounds=bl_x_bounds,
+                y_bounds=bl_y_bounds,
+            )
+
+            if self.close_target_index < len(self.target_agents):
+                ScenarioUtils.spawn_entities_randomly(
+                    entities=[self.target_agents[self.close_target_index]],
+                    world=self.world,
+                    env_index=env_index,
+                    min_dist_between_entities=self.min_dist_between_entities,
+                    x_bounds=bl_x_bounds,
+                    y_bounds=bl_y_bounds,
+                )
+
+            other_targets = [t for i, t in enumerate(self.target_agents) if i != self.close_target_index]
+            if other_targets:
+                ScenarioUtils.spawn_entities_randomly(
+                    entities=other_targets,
+                    world=self.world,
+                    env_index=env_index,
+                    min_dist_between_entities=self.min_dist_between_entities,
+                    x_bounds=tr_x_bounds,
+                    y_bounds=tr_y_bounds,
+                )
+                
+            # Broad belief around the close target (bottom-left)
+            mean_x = -self.world.x_semidim * 0.875
+            mean_y = -self.world.y_semidim * 0.875
+            spread_x = self.world.x_semidim * 0.5
+            spread_y = self.world.y_semidim * 0.5
+            
+            new_bpos = torch.cat([
+                torch.empty(self.world.batch_dim, self.n_targets, 1, device=self.world.device).uniform_(mean_x - spread_x, mean_x + spread_x).clamp(-self.world.x_semidim, self.world.x_semidim),
+                torch.empty(self.world.batch_dim, self.n_targets, 1, device=self.world.device).uniform_(mean_y - spread_y, mean_y + spread_y).clamp(-self.world.y_semidim, self.world.y_semidim)
+            ], dim=2)
+            
+            # Keep it broad (large covariance)
+            new_bcov = torch.eye(2, device=self.world.device).reshape(1, 1, 2, 2).repeat(self.world.batch_dim, self.n_targets, 1, 1) * 2.0
+            
+            for agent in self.foraging_agents:
+                if env_index is not None:
+                    agent.belief_target_pos[env_index] = new_bpos[env_index]
+                    agent.belief_target_covariance[env_index] = new_bcov[env_index]
+                else:
+                    agent.belief_target_pos.copy_(new_bpos)
+                    agent.belief_target_covariance.copy_(new_bcov)
+        else:
+            ScenarioUtils.spawn_entities_randomly(
+                entities=self.world.agents,
+                world=self.world,
+                env_index=env_index,
+                min_dist_between_entities=self.min_dist_between_entities,
+                x_bounds=(-self.world.x_semidim * self.initialization_box_ratio,
+                          self.world.x_semidim * self.initialization_box_ratio),
+                y_bounds=(-self.world.y_semidim * self.initialization_box_ratio,
+                          self.world.y_semidim * self.initialization_box_ratio),
+            )
 
     def reward(self, agent: Agent):
         if not isinstance(agent, ForagingAgent):
@@ -329,6 +399,16 @@ class Scenario(BaseScenario):
         device = self.world.device
         batch_dim = self.world.batch_dim
 
+        if self.respawn_mode == "group_center":
+            all_pos = torch.stack([a.state.pos for a in self.foraging_agents], dim=1) # (batch_dim, n_agents, 2)
+            valid_mask = ~newborn_mask # (batch_dim, n_agents)
+            
+            # Prevent division by zero if all agents are newborn
+            denom = valid_mask.sum(dim=1, keepdim=True).unsqueeze(-1)
+            denom = torch.clamp(denom, min=1)
+            
+            group_mean_pos = (all_pos * valid_mask.unsqueeze(-1)).sum(dim=1) / denom
+
         for i, agent in enumerate(self.foraging_agents):
             if not isinstance(agent, ForagingAgent):
                 continue
@@ -338,13 +418,21 @@ class Scenario(BaseScenario):
             if not agent_mask.any():
                 continue
 
-            # Randomize positions
-            new_pos = torch.cat([
-                torch.empty(batch_dim, 1, device=device).uniform_(-self.world.x_semidim * self.initialization_box_ratio,
-                                                                  self.world.x_semidim * self.initialization_box_ratio),
-                torch.empty(batch_dim, 1, device=device).uniform_(-self.world.y_semidim * self.initialization_box_ratio,
-                                                                  self.world.y_semidim * self.initialization_box_ratio)
-            ], dim=1)
+            if self.respawn_mode == "group_center":
+                # Respawn in the middle of the current group with some noise
+                noise = torch.randn_like(agent.state.pos) * 0.2
+                new_pos = group_mean_pos + noise
+            else:
+                # Randomize positions
+                new_pos = torch.cat([
+                    torch.empty(batch_dim, 1, device=device).uniform_(-self.world.x_semidim * self.initialization_box_ratio,
+                                                                      self.world.x_semidim * self.initialization_box_ratio),
+                    torch.empty(batch_dim, 1, device=device).uniform_(-self.world.y_semidim * self.initialization_box_ratio,
+                                                                      self.world.y_semidim * self.initialization_box_ratio)
+                ], dim=1)
+            
+            new_pos[..., 0].clamp_(-self.world.x_semidim, self.world.x_semidim)
+            new_pos[..., 1].clamp_(-self.world.y_semidim, self.world.y_semidim)
             
             agent.state.pos = torch.where(agent_mask.unsqueeze(-1), new_pos, agent.state.pos)
             agent.state.vel = torch.where(agent_mask.unsqueeze(-1), torch.zeros_like(agent.state.vel), agent.state.vel)

@@ -46,6 +46,13 @@ st.sidebar.markdown("---")
 env_switch = st.sidebar.toggle("Enable Periodic Switch", value=False)
 switch_time = st.sidebar.slider("Switch Interval (Steps)", 10, 2000, 500)
 
+st.sidebar.markdown("---")
+scenario_type = st.sidebar.selectbox("Scenario Type", [None, "one_close_one_far"], index=0)
+close_target_index = st.sidebar.slider("Close Target Index", 0, max(0, n_targets - 1), 0)
+env_dim = st.sidebar.slider("Environment Dimension", 2, 20, 2)
+respawn_mode = st.sidebar.selectbox("Respawn Mode", ["group_center", "random"], index=0)
+
+
 target_pattern = st.sidebar.selectbox("Target Movement Pattern", ["crw", "periodically_relocate", "levy"], index=0)
 if target_pattern == "periodically_relocate":
     relocation_interval = st.sidebar.slider("Relocation Interval", 50, 1000, 250)
@@ -77,13 +84,13 @@ def reset_simulation():
     # IMPORTANT: is_interactive must be False so the scenario 
     # doesn't override our actions in Scenario.process_action
     params = {
-        'x_dim': 2, 'y_dim': 2, 
+        'x_dim': env_dim, 'y_dim': env_dim, 
         'target_speed': t_speed,
         'n_agents': n_agents, 
         'n_targets': n_targets, 
         'target_quality': 'HT',
         # 'target_speeds': [0.3, 0.5],
-        'target_qualities': [0.1, 1.0],
+        'target_qualities': [0.5, 1.0],
         'is_interactive': False, 
         'initialization_box_ratio': 1.0,
         'visualize_semidims': True, 
@@ -113,6 +120,9 @@ def reset_simulation():
         'channel_y_name': "Belief",
         'env_switch': env_switch,
         'switch_time': switch_time,
+        'scenario_type': scenario_type,
+        'close_target_index': close_target_index,
+        'respawn_mode': respawn_mode,
     }
     env = VmasEnv(scenario=Scenario(), num_envs=1, device="cpu", **params)
     env.reset()
