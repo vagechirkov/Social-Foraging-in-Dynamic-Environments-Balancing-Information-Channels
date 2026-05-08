@@ -44,6 +44,7 @@ p_spatial_explore: 0.0
 belief_selectivity_threshold: 0.25
 decision_making: "greedy"
 bias_magnitude: 0.0
+min_dist_between_entities: 0.001
 
 # Targets
 n_targets: 2
