@@ -98,6 +98,8 @@ srun --jobid=123456 nvidia-smi
 Check the number of running and pending jobs:
 ```bash
 echo "Pending: $(squeue -u valerii -t PD -h | wc -l) | Running: $(squeue -u valerii -t R -h | wc -l) | Total: $(squeue -u valerii -h | wc -l)"
+
+watch -n 10 'echo "Pending: $(squeue -u valerii -t PD -h | wc -l) | Running: $(squeue -u valerii -t R -h | wc -l) | Total: $(squeue -u valerii -h | wc -l)"'
 ```
 
 ## Run 3 channels parameter sweep
