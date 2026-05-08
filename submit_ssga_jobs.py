@@ -26,6 +26,10 @@ def submit_ssga_jobs():
     print(f"N agents: {n_agents_list}")
     print(f"History reset: {history_reset_list}")
     print(f"MLS: {mls_list}")
+    print(f"Scenario types: {scenario_types}")
+    print(f"Environment dimensions: {env_dims}")
+    print(f"Close target indices: {close_target_indices}")
+    print(f"Respawn modes: {respawn_modes}")
     print(f"Using submit script: {sbatch_script}")
 
     combinations = list(itertools.product(n_agents_list, switch_times, cull_fractions, history_reset_list, mls_list, scenario_types, env_dims, close_target_indices, respawn_modes))
