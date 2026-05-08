@@ -404,7 +404,7 @@ class Scenario(BaseScenario):
             valid_mask = ~newborn_mask # (batch_dim, n_agents)
             
             # Prevent division by zero if all agents are newborn
-            denom = valid_mask.sum(dim=1, keepdim=True).unsqueeze(-1)
+            denom = valid_mask.sum(dim=1, keepdim=True)
             denom = torch.clamp(denom, min=1)
             
             group_mean_pos = (all_pos * valid_mask.unsqueeze(-1)).sum(dim=1) / denom
