@@ -104,10 +104,11 @@ class ForagingAgent(Agent):
         self.x_dim = x_dim
         self.y_dim = y_dim
 
-        # 3. Energy Costs Vector [Priv, Belief, Heading, Pos, None, Consensus]
+        # 3. Energy Costs Vector [Priv, Social, None]
         # Used for reward calculation/energy expenditure tracking
+        # Re-aligned to match ssga_2_targets.py: 0=Priv, 1=Social, 2=None
         self.channel_costs = torch.tensor(
-            [cost_priv, cost_belief, cost_heading, cost_pos, 0.0, cost_consensus],
+            [cost_priv, cost_belief, 0.0],
             device=device
         )
         # SENSOR BIAS: A random vector that this specific agent 
@@ -909,7 +910,7 @@ class AgentObservations:
 def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: List[Agent]):
     """
     Collects observations based on agent.action.u[:, 0].
-    Channels: 0: Priv, 1: Belief, 2: Heading, 3: Pos, 4: None, 5: Consensus
+    Channels: 0: Priv, 1: Social, 2: None
     """
     # reset validity mask
     agent.obs_validity_mask[:] = True
@@ -922,20 +923,20 @@ def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: Li
     else:
         random_other_agent_ind = torch.zeros(agent.batch_dim, device=agent.device).long()
 
-    # Channel 4: None (observations remain the same; belief is not updated).
+    # Channel 2: None (observations remain the same; belief is not updated).
     channel_observation_functions = {
         # 0: partial(AgentObservations.private, targets=targets),
         0: partial(AgentObservations.private_spotlight, targets=targets, spot_radius=agent.spot_radius),
         1: partial(AgentObservations.others_belief, other_agents=other_agents,
                    other_agent_mask=random_other_agent_ind),
-        2: partial(AgentObservations.others_heading, other_agents=other_agents,
-                   other_agent_mask=random_other_agent_ind),
-        3: partial(AgentObservations.others_location, other_agents=other_agents,
-                   other_agent_mask=random_other_agent_ind),
-        5: partial(AgentObservations.others_consensus, other_agents=other_agents,
-                   other_agent_mask=random_other_agent_ind,
-                   targets=targets,
-                   aggregation_method=agent.social_info_aggregation)
+        # 2: partial(AgentObservations.others_heading, other_agents=other_agents,
+        #            other_agent_mask=random_other_agent_ind),
+        # 3: partial(AgentObservations.others_location, other_agents=other_agents,
+        #            other_agent_mask=random_other_agent_ind),
+        # 5: partial(AgentObservations.others_consensus, other_agents=other_agents,
+        #            other_agent_mask=random_other_agent_ind,
+        #            targets=targets,
+        #            aggregation_method=agent.social_info_aggregation)
     }
 
     for ch_idx, obs_func in channel_observation_functions.items():
@@ -1005,8 +1006,8 @@ def update_belief(agent: ForagingAgent):
     spatial (vector) and quality (scalar) components.
     """
     # 1. Identify agents/targets to update
-    # Channels: 0: Private, 1: Belief, 2: Heading, 3: Pos, 4: None
-    agent_active_mask = (agent.action.u[:, 0].long() != 4) & agent.obs_validity_mask
+    # Channels: 0: Private, 1: Social, 2: None
+    agent_active_mask = (agent.action.u[:, 0].long() != 2) & agent.obs_validity_mask
     
     # Combined mask: (batch, n_targets)
     # Only update if agent is active AND target observation is valid

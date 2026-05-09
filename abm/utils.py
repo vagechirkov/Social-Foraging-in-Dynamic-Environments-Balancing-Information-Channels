@@ -28,10 +28,7 @@ from .agent import ForagingAgent, TargetAgent
 STATE_COLOR_MAP = {
     0: (0, 0.619, 0.451),  # private #009E73
     1: (0.337, 0.706, 0.914),  # social #56B4E9
-    2: (0.337, 0.706, 0.914),  # social #56B4E9
-    3: (0.337, 0.706, 0.914),  # social #56B4E9
-    4: (0.902, 0.624, 0),  # none #E69F00
-    5: (0.337, 0.706, 0.914), # social #56B4E9
+    2: (0.902, 0.624, 0),  # none #E69F00
 }
 
 

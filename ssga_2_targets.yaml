@@ -26,7 +26,7 @@ respawn_mode: "group_center"
 
 # SSGA Parameters
 ssga:
-  eval_interval: 1000
+  eval_interval: 250
   cull_fraction: 0.15
   mutation_prob: 0.6
   mutation_sigma: 0.1
