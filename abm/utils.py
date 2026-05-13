@@ -607,6 +607,9 @@ class ExperimentLogger:
         global_covs: torch.Tensor,
         step: int,
         n_islands: int,
+        agent_age: Optional[torch.Tensor] = None,
+        interval_cumulative_fitness: Optional[torch.Tensor] = None,
+        interval_last_step_fitness: Optional[torch.Tensor] = None,
         prefix: str = "ssga/"
     ):
         """Logs SSGA-specific metrics including Price equation covariances, histograms, and ternary density."""
@@ -652,6 +655,39 @@ class ExperimentLogger:
         )
         wandb.log({f"{prefix}ternary_density_all": wandb.Image(fig_all)}, step=step)
         plt.close(fig_all)
+
+        if agent_age is not None and interval_cumulative_fitness is not None and interval_last_step_fitness is not None:
+            columns = [
+                "group_id", "agent_id", "age", "cumulative_fitness", 
+                "current_fitness", "avg_fitness",
+                "gene_priv", "gene_soc", "gene_none", "gene_eve"
+            ]
+            
+            n_agents = interval_fitness.shape[1]
+            age_np = agent_age.cpu().numpy()
+            cum_fit_np = interval_cumulative_fitness.cpu().numpy()
+            cur_fit_np = interval_last_step_fitness.cpu().numpy()
+            avg_fit_np = interval_fitness.cpu().numpy()
+            genes_np = genes.cpu().numpy()
+            
+            group_ids = np.repeat(np.arange(n_islands), n_agents)
+            agent_ids = np.tile(np.arange(n_agents), n_islands)
+            
+            data = np.column_stack([
+                group_ids,
+                agent_ids,
+                age_np.flatten(),
+                cum_fit_np.flatten(),
+                cur_fit_np.flatten(),
+                avg_fit_np.flatten(),
+                genes_np[:, :, 0].flatten(),
+                genes_np[:, :, 1].flatten(),
+                genes_np[:, :, 2].flatten(),
+                genes_np[:, :, 3].flatten()
+            ]).tolist()
+            
+            tbl = wandb.Table(columns=columns, data=data)
+            wandb.log({f"{prefix}agent_stats": tbl}, step=step)
 
     def log_parallel_plot(self, islands, fitness_tensor, gen, prefix: str = ""):
         """Generates and logs the parallel coordinate plot for Top K islands."""

@@ -79,6 +79,8 @@ def run_ssga(cfg: DictConfig):
     
     print(f"Starting SSGA Simulation for {max_ticks} ticks (eval interval: {eval_interval})...")
     
+    agent_age = torch.zeros(n_islands, n_agents, device=device)
+    
     while total_ticks < max_ticks:
         with torch.inference_mode():
             rollouts = env.rollout(
@@ -94,6 +96,10 @@ def run_ssga(cfg: DictConfig):
             # [Islands, Steps, Agents, 1]
             rewards = rollouts["next", "agents", "reward"]
             interval_fitness = rewards.mean(dim=1).squeeze(-1) # [Islands, Agents]
+            
+            agent_age += eval_interval
+            interval_cumulative_fitness = rewards.sum(dim=1).squeeze(-1)
+            interval_last_step_fitness = rewards[:, -1, :, :].squeeze(-1)
             
             # Phenotypes for analysis
             genes = last_td["genes"] # [Islands, Agents, 4]
@@ -139,7 +145,10 @@ def run_ssga(cfg: DictConfig):
                     genes, 
                     global_covs, 
                     total_ticks + eval_interval - 1, 
-                    n_islands
+                    n_islands,
+                    agent_age=agent_age,
+                    interval_cumulative_fitness=interval_cumulative_fitness,
+                    interval_last_step_fitness=interval_last_step_fitness
                 )
             
             # 3. Vectorized SSGA Culling & Cloning
@@ -181,6 +190,8 @@ def run_ssga(cfg: DictConfig):
                 
                 # Mark all agents in bottom islands as newborns so they get reset
                 newborn_mask[bottom_islands, :] = True
+
+            agent_age[newborn_mask] = 0
 
             last_td["genes"] = genes
             
