@@ -9,7 +9,7 @@ eve_min: 0.01
 eve_max: 0.1
 init_strategy: "middle"
 
-n_envs: 2500        # Number of islands (replicates)
+n_envs: 1000        # Number of islands (replicates)
 n_agents: 30       # Agents per island
 max_ticks: 100000000   # Total simulation ticks
 

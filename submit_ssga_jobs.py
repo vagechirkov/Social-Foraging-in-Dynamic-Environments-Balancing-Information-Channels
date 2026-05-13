@@ -8,15 +8,15 @@ def submit_ssga_jobs():
     args = parser.parse_args()
 
     # Define parameter ranges
-    switch_times = [1000, 30000, 50000]
+    switch_times = [100000]
     cull_fractions = [0.2]
     n_agents_list = [15]  # , 10, 60
     history_reset_list = [False]  # True, 
-    mls_list = [False, True] # , True
+    mls_list = [False] # , True
     scenario_types = ["one_close_one_far"] # , "none"
     env_dims = [2, 4]
     close_target_indices = [0, 1]
-    respawn_modes = ["random", "group_center" ]
+    respawn_modes = ["group_center"]  # "random", 
 
     sbatch_script = "ssga_gpu_hpc_scioi.sh"
 
