@@ -522,6 +522,7 @@ cython_debug/
 .idea/
 
 *.mp4
+*.gif
 wandb/
 *.png
 uv.lock
