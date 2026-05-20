@@ -38,60 +38,75 @@ curves_config = [
     #     "end": 180990,
     #     "label": "MLS, R=20"
     # },
+    # {
+    #     # "run_path": "chirkov/ssga_2_targets/nftwovc4",  # 1000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.01
+    #     # "run_path": "chirkov/ssga_2_targets/pagjdqpc",  # 1000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.5
+    #     "run_path": "chirkov/ssga_2_targets/6kvfeps2",  # 1000, cost 0.1 both, target speed 0.5_to_0.7, target quality 1.0-0.01
+    #     "key": "tick/avg_fitness",
+    #     "start": 50000,
+    #     "end": 50990,
+    #     "label": "R=1"
+    # },
+    # {
+    #     # "run_path": "chirkov/ssga_2_targets/90u21lkg",  # 1000, cost 0.1 both, history cleaned, target speed 0.5-0.5, target quality 1.0-0.01
+    #     # "run_path": "chirkov/ssga_2_targets/fre37qra",  # 1000, cost 0.1 both, history cleaned, target speed 0.5-0.5, target quality 1.0-0.5
+    #     "run_path": "chirkov/ssga_2_targets/f9q70gm2",  # 1000, cost 0.1 both, history cleaned, target speed 0.5_to_0.7, target quality 1.0-0.01
+    #     "key": "tick/avg_fitness",
+    #     "start": 50000,
+    #     "end": 50990,
+    #     "label": "R=1, HR"
+    # },
+    # {
+    #     # "run_path": "chirkov/ssga_2_targets/xm5yqik7",  # 50_000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.01
+    #     # "run_path": "chirkov/ssga_2_targets/vae33dpg",  # 50_000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.5
+    #     "run_path": "chirkov/ssga_2_targets/mblpjznl",  # 50_000, cost 0.1 both, target speed 0.5_to_0.7, target quality 1.0-0.01
+    #     "key": "tick/avg_fitness",
+    #     "start": 50000,
+    #     "end": 50990,
+    #     "label": "R=50"
+    # },
+    # {
+    #     # "run_path": "chirkov/ssga_2_targets/fyd61jgo",  # MLS, 1000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.01
+    #     # "run_path": "chirkov/ssga_2_targets/ks1y9tgo",  # MLS, 1000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.5
+    #      "run_path": "chirkov/ssga_2_targets/rl3bi85q",  # MLS, 1000, cost 0.1 both, target speed 0.5_to_0.7, target quality 1.0-0.01
+    #     "key": "tick/avg_fitness",
+    #     "start": 50000,
+    #     "end": 50990,
+    #     "label": "MLS, R=1"
+    # },
+    # {
+    #     # "run_path": "chirkov/ssga_2_targets/jukv3alm",  # MLS, 1000, cost 0.1 both, history cleaned, target speed 0.5-0.5, target quality 1.0-0.01
+    #     # "run_path": "chirkov/ssga_2_targets/vcbl21e8",  # MLS, 1000, cost 0.1 both, history cleaned, target speed 0.5-0.5, target quality 1.0-0.5
+    #     "run_path": "chirkov/ssga_2_targets/bx4ysk1x",  # MLS, 1000, cost 0.1 both, history cleaned, target speed 0.5_to_0.7, target quality 1.0-0.01
+    #     "key": "tick/avg_fitness",
+    #     "start": 50000,
+    #     "end": 50990,
+    #     "label": "MLS, R=1, HR"
+    # },
+    # {
+    #     # "run_path": "chirkov/ssga_2_targets/9flryakq",  # MLS, 50_000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.01
+    #     # "run_path": "chirkov/ssga_2_targets/b24hzr9n",  # MLS, 50_000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.5
+    #     "run_path": "chirkov/ssga_2_targets/cdueszu2",  # MLS, 50_000, cost 0.1 both, target speed 0.5_to_0.7, target quality 1.0-0.01
+    #     "key": "tick/avg_fitness",
+    #     "start": 50000,
+    #     "end": 50990,
+    #     "label": "MLS, R=50"
+    # }
     {
-        # "run_path": "chirkov/ssga_2_targets/nftwovc4",  # 1000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.01
-        # "run_path": "chirkov/ssga_2_targets/pagjdqpc",  # 1000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.5
-        "run_path": "chirkov/ssga_2_targets/6kvfeps2",  # 1000, cost 0.1 both, target speed 0.5_to_0.7, target quality 1.0-0.01
+
+        "run_path": "chirkov/ssga_2_targets/xovszdf6",
         "key": "tick/avg_fitness",
-        "start": 50000,
-        "end": 50990,
-        "label": "R=1"
+        "start": 150000,
+        "end": 150990,
+        "label": "Env change every 1 gen"
     },
     {
-        # "run_path": "chirkov/ssga_2_targets/90u21lkg",  # 1000, cost 0.1 both, history cleaned, target speed 0.5-0.5, target quality 1.0-0.01
-        # "run_path": "chirkov/ssga_2_targets/fre37qra",  # 1000, cost 0.1 both, history cleaned, target speed 0.5-0.5, target quality 1.0-0.5
-        "run_path": "chirkov/ssga_2_targets/f9q70gm2",  # 1000, cost 0.1 both, history cleaned, target speed 0.5_to_0.7, target quality 1.0-0.01
+        "run_path": "chirkov/ssga_2_targets/b60kfquh",
         "key": "tick/avg_fitness",
-        "start": 50000,
-        "end": 50990,
-        "label": "R=1, HR"
+        "start": 150000,
+        "end": 150990,
+        "label": "Env change every 50 gen"
     },
-    {
-        # "run_path": "chirkov/ssga_2_targets/xm5yqik7",  # 50_000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.01
-        # "run_path": "chirkov/ssga_2_targets/vae33dpg",  # 50_000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.5
-        "run_path": "chirkov/ssga_2_targets/mblpjznl",  # 50_000, cost 0.1 both, target speed 0.5_to_0.7, target quality 1.0-0.01
-        "key": "tick/avg_fitness",
-        "start": 50000,
-        "end": 50990,
-        "label": "R=50"
-    },
-    {
-        # "run_path": "chirkov/ssga_2_targets/fyd61jgo",  # MLS, 1000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.01
-        # "run_path": "chirkov/ssga_2_targets/ks1y9tgo",  # MLS, 1000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.5
-         "run_path": "chirkov/ssga_2_targets/rl3bi85q",  # MLS, 1000, cost 0.1 both, target speed 0.5_to_0.7, target quality 1.0-0.01
-        "key": "tick/avg_fitness",
-        "start": 50000,
-        "end": 50990,
-        "label": "MLS, R=1"
-    },
-    {
-        # "run_path": "chirkov/ssga_2_targets/jukv3alm",  # MLS, 1000, cost 0.1 both, history cleaned, target speed 0.5-0.5, target quality 1.0-0.01
-        # "run_path": "chirkov/ssga_2_targets/vcbl21e8",  # MLS, 1000, cost 0.1 both, history cleaned, target speed 0.5-0.5, target quality 1.0-0.5
-        "run_path": "chirkov/ssga_2_targets/bx4ysk1x",  # MLS, 1000, cost 0.1 both, history cleaned, target speed 0.5_to_0.7, target quality 1.0-0.01
-        "key": "tick/avg_fitness",
-        "start": 50000,
-        "end": 50990,
-        "label": "MLS, R=1, HR"
-    },
-    {
-        # "run_path": "chirkov/ssga_2_targets/9flryakq",  # MLS, 50_000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.01
-        # "run_path": "chirkov/ssga_2_targets/b24hzr9n",  # MLS, 50_000, cost 0.1 both, target speed 0.5-0.5, target quality 1.0-0.5
-        "run_path": "chirkov/ssga_2_targets/cdueszu2",  # MLS, 50_000, cost 0.1 both, target speed 0.5_to_0.7, target quality 1.0-0.01
-        "key": "tick/avg_fitness",
-        "start": 50000,
-        "end": 50990,
-        "label": "MLS, R=50"
-    }
 ]
 
 def main():
@@ -115,7 +130,9 @@ def main():
     
     # Wong's colorblind palette
     # "orange, sky blue, green, yellow, blue, red, pink, black"
-    cb_palette = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#000000"]
+    # cb_palette = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#000000"]
+    # "green, purple, orange, blue"
+    cb_palette = ['#1b9e77', "#7570b3", '#d95f02', '#7fc97f']
     plt.rcParams['axes.prop_cycle'] = cycler(color=cb_palette)
 
     api = wandb.Api()
@@ -151,7 +168,7 @@ def main():
         # Plot without smoothing
         ax.plot(df['normalized_step'], df[config['key']], linewidth=1.5, alpha=0.9, label=config.get('label', ''))
 
-    ax.set_xlabel("Relative Time Step")
+    ax.set_xlabel("Time Step After Env Change")
     ax.set_ylabel("Average Fitness")
     # ax.set_title("Average Fitness from wandb Runs")
 
@@ -159,7 +176,7 @@ def main():
     ax.legend()
 
     # Save the plot as png
-    output_filename = "wandb_curves_5_quality_1.0_0.01_speed_0.5_to_0.7.png"
+    output_filename = "wandb_curves6.png"
     plt.savefig(output_filename, dpi=300, bbox_inches='tight')
     print(f"\nPlot successfully saved as {output_filename}")
 
