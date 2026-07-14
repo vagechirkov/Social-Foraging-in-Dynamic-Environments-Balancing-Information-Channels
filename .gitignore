@@ -534,3 +534,4 @@ multirun/
 *.db
 best_env_params.yaml
 .venv2/
+*.pdf
