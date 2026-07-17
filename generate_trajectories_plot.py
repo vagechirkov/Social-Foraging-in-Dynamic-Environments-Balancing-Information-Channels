@@ -59,7 +59,7 @@ df_group_steps = df_flow.groupby(group_cols)[['prob_priv', 'prob_soc', 'prob_non
 
 # Ensure chronological ordering
 df_group_steps = df_group_steps.sort_values(['run_id', 'group_id', 'step'])
-
+df_gs_all = df_group_steps.copy()
 
 print("Calculating raw median performance per group from df...")
 group_perf = df.groupby(['run_id', 'group_id', 'step', 'close_target_index'])['current_fitness'].median().reset_index()
@@ -120,13 +120,12 @@ def draw_streamplot(ax, data, cmap, title, H=np.sqrt(3)/2):
 
 n_clusters = 6
 palette = sns.color_palette("coolwarm_r", as_cmap=True)
-custom_cmap = mcolors.ListedColormap(['#E69F00', '#0072B2'])
-# Define the threshold at 0.7 (bounds encompass potential min and max values)
-bounds = [-0.1, 0.6, 1] 
-norm = mcolors.BoundaryNorm(bounds, custom_cmap.N)
+custom_cmap = mcolors.LinearSegmentedColormap.from_list('custom', ['#E69F00', '#0072B2'])
+
 print("Generating clustered trajectories based on raw median performance...")
 
 conditions = sorted(group_perf['close_target_index'].unique())
+cluster_groups_by_cond = {}
 
 for i, cond in enumerate(conditions):
     cond_data = group_perf[group_perf['close_target_index'] == cond].copy()
@@ -158,12 +157,14 @@ for i, cond in enumerate(conditions):
         
         groups = heatmap_data.index[sorted_idx_in_cluster].tolist()
         cluster_groups.append(groups)
+    
+    cluster_groups_by_cond[cond] = cluster_groups
 
     heatmap_data = heatmap_data.iloc[sorted_indices]
     heatmap_cols = heatmap_data.columns
     
-    fig = plt.figure(figsize=(38, 32))
-    gs = gridspec.GridSpec(3, n_clusters, height_ratios=[2, 1, 1], hspace=0.18, wspace=0.05)
+    fig = plt.figure(figsize=(38, 20))
+    gs = gridspec.GridSpec(4, n_clusters, height_ratios=[2, 0.3, 1, 1], hspace=0.05, wspace=0.05)
     
     ax_main = fig.add_subplot(gs[0, :])
 
@@ -175,8 +176,8 @@ for i, cond in enumerate(conditions):
         cmap=custom_cmap, 
         interpolation='none', 
         extent=extent, 
-        norm=norm,
         origin='lower', 
+        rasterized=True
         )
 
     ax_main.set_xlabel("Generation (1k steps)", fontsize=32, labelpad=0)
@@ -187,9 +188,9 @@ for i, cond in enumerate(conditions):
     ax_main.tick_params(labelsize=24)
     ax_main.axvline(x=100, color='white', linestyle=':', linewidth=3)
 
-    title_str = "Init Good Target" if cond == 0 else "Init Bad Target"
+    title_str = "Good Target Initialisation" if cond == 0 else "Bad Target Initialisation"
     ax_main.set_yticks([])
-    ax_main.set_ylabel(f"Groups {title_str} (Clustered & Sorted)", fontsize=28, weight='bold', labelpad=70)
+    ax_main.set_ylabel(f"Groups {title_str}", fontsize=28, labelpad=70) # , weight='bold'  (Clustered & Sorted)
 
     for idx, (y_min, y_max) in enumerate(cluster_boundaries):
         rect = Rectangle((extent[0], y_min), extent[1]-extent[0], y_max-y_min, 
@@ -202,12 +203,9 @@ for i, cond in enumerate(conditions):
 
     cbar_ax = fig.add_axes([0.91, 0.53, 0.015, 0.35])
     
-    cbar = fig.colorbar(cax, cax=cbar_ax, orientation='vertical', spacing='proportional')
-    cbar.ax.tick_params(labelsize=28)
-    cbar.set_ticks([0.3, 0.8])
-    cbar.ax.set_yticklabels(['< 0.6', '> 0.6'], rotation=90, va='center')
-    cbar.ax.tick_params(labelsize=28, length=0)
-    cbar.set_label('Median Performance', fontsize=32, weight='bold', labelpad=5)
+    cbar = fig.colorbar(cax, cax=cbar_ax, orientation='vertical')
+    cbar.ax.tick_params(labelsize=28, length=5)
+    cbar.set_label('Median Performance', fontsize=32, labelpad=5) #  , weight='bold'
 
     info_genes = ['prob_priv', 'prob_soc', 'prob_none']
     info_labels = ['Private', 'Social', 'None']
@@ -223,9 +221,9 @@ for i, cond in enumerate(conditions):
         df_gs_all['unique_group'] = df_gs_all['run_id'].astype(str) + '_' + df_gs_all['group_id'].astype(str)
         
     for cluster_col, (cluster_idx, groups) in enumerate(reversed(list(enumerate(cluster_groups)))):
-        ax_info = fig.add_subplot(gs[1, cluster_col])
-        ax_noise = fig.add_subplot(gs[2, cluster_col])
-        # ax_flow = fig.add_subplot(gs[3, cluster_col])
+        ax_info = fig.add_subplot(gs[2, cluster_col])
+        ax_noise = fig.add_subplot(gs[3, cluster_col])
+        # ax_flow = fig.add_subplot(gs[4, cluster_col])
         
         cluster_df = df_gs_all[df_gs_all['unique_group'].isin(groups)]
         
@@ -289,13 +287,15 @@ for i, cond in enumerate(conditions):
         #     
         # draw_streamplot(ax_flow, flow_df, 'Blues', 'Flow Gen 1-7')
 
-    filename = 'clustered_trajectories_gene_ts_perf_good.pdf' if cond == 0 else 'clustered_trajectories_gene_ts_perf_bad.pdf'
+    os.makedirs('figures', exist_ok=True)
+    filename = f'figures/clustered_trajectories_gene_ts_perf_{"good" if cond == 0 else "bad"}.png'
     plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.savefig(filename.replace('.png', '.pdf'), dpi=300, bbox_inches='tight')
     # # plt.show()
     plt.close(fig)
 
 
-# Separate Flow Diagram for Bad Target Initialization (Clusters 1 and 6)
+# Separate Flow Diagram for Good Target Initialization (using Bad Target separatrix)
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 from scipy.stats import binned_statistic_2d
@@ -314,121 +314,183 @@ if 'mx' not in df_gs_all.columns:
     df_gs_all['mx'] = df_gs_all['prob_none'] + 0.5 * df_gs_all['prob_soc']
     df_gs_all['my'] = H * df_gs_all['prob_soc']
 
-# Identify Best and Worst Groups
-best_groups = cluster_groups[5]
-worst_groups = cluster_groups[0]
+infer_separately = True
 
-best_df = df_gs_all[df_gs_all['unique_group'].isin(best_groups)]
-worst_df = df_gs_all[df_gs_all['unique_group'].isin(worst_groups)]
-
-# Calculate Divergence Step
-best_means = best_df.groupby('step')[['mx', 'my']].mean()
-worst_means = worst_df.groupby('step')[['mx', 'my']].mean()
-merged_means = best_means.join(worst_means, lsuffix='_best', rsuffix='_worst').dropna()
-merged_means['dist'] = np.sqrt((merged_means['mx_best'] - merged_means['mx_worst'])**2 + (merged_means['my_best'] - merged_means['my_worst'])**2)
-
-diverge_step = merged_means[merged_means['dist'] > 0.05].index.min()
-diverge_gen = (diverge_step + 1) / 1000 if diverge_step is not pd.NA else 6.0
-print(f"Divergence Generation: {diverge_gen}")
-
-# Infer Separatrix using SVM
-post_best = best_df[best_df['step'] >= diverge_step][['mx', 'my']].dropna()
-post_worst = worst_df[worst_df['step'] >= diverge_step][['mx', 'my']].dropna()
-X_svm = np.vstack([post_best.values, post_worst.values])
-y_svm = np.array([1]*len(post_best) + [0]*len(post_worst))
-
-svm = LinearSVC(random_state=42, C=1.0)
-svm.fit(X_svm, y_svm)
-w = svm.coef_[0]
-b = svm.intercept_[0]
-print(f"Separatrix equation: {w[0]:.4f} * mx + {w[1]:.4f} * my + {b:.4f} = 0")
-
-target_clusters = [
-    ("Cluster 1 (Best)", best_groups, 'Blues'),
-    ("Cluster 6 (Worst)", worst_groups, 'Reds')
-]
-
-fig, axes = plt.subplots(2, 2, figsize=(14, 12))
-H = np.sqrt(3)/2
-
-periods = [
-    (f'Gen 0-{int(diverge_gen)} (Pre-Divergence)', lambda d: d['step'] < diverge_step),
-    (f'Gen {int(diverge_gen)}-100 (Post-Divergence)', lambda d: d['step'] >= diverge_step)
-]
-
-grid_res = 50
-x_bins = np.linspace(-0.05, 1.05, grid_res)
-y_bins = np.linspace(-0.05, H + 0.05, grid_res)
-X, Y = np.meshgrid(x_bins[:-1] + np.diff(x_bins)/2, y_bins[:-1] + np.diff(y_bins)/2)
-
-sep_x = np.linspace(0, 1, 500)
-sep_y = -(w[0] * sep_x + b) / (w[1] + 1e-10)
-
-# Mask separatrix to triangle bounds
-mask_triangle = (sep_y >= 0) & (sep_y <= np.sqrt(3) * sep_x) & (sep_y <= -np.sqrt(3) * (sep_x - 1))
-sep_x = sep_x[mask_triangle]
-sep_y = sep_y[mask_triangle]
-
-for row, (cluster_title, groups, cmap) in enumerate(target_clusters):
-    cluster_df = df_gs_all[df_gs_all['unique_group'].isin(groups)].copy()
+def infer_separatrix_for_cond(cond_val):
+    target_best_groups = cluster_groups_by_cond[cond_val][5]
+    target_worst_groups = cluster_groups_by_cond[cond_val][0]
     
-    cluster_df = cluster_df.sort_values(['run_id', 'group_id', 'step'])
-    cluster_df['dmx'] = cluster_df.groupby(['run_id', 'group_id'])['mx'].diff()
-    cluster_df['dmy'] = cluster_df.groupby(['run_id', 'group_id'])['my'].diff()
+    target_best_df = df_gs_all[df_gs_all['unique_group'].isin(target_best_groups)]
+    target_worst_df = df_gs_all[df_gs_all['unique_group'].isin(target_worst_groups)]
     
-    for col, (period_title, filter_func) in enumerate(periods):
-        ax = axes[row, col]
-        
-        triangle = Polygon([[0, 0], [1, 0], [0.5, H]], fill=False, edgecolor='black', linewidth=2.5, zorder=4)
-        ax.add_patch(triangle)
-        
-        phase_data = cluster_df[filter_func(cluster_df)].dropna(subset=['dmx', 'dmy'])
-        
-        if len(phase_data) >= 5:
-            U, _, _, _ = binned_statistic_2d(phase_data['mx'], phase_data['my'], phase_data['dmx'], statistic='mean', bins=[x_bins, y_bins])
-            V, _, _, _ = binned_statistic_2d(phase_data['mx'], phase_data['my'], phase_data['dmy'], statistic='mean', bins=[x_bins, y_bins])
-            Counts, _, _, _ = binned_statistic_2d(phase_data['mx'], phase_data['my'], phase_data['dmx'], statistic='count', bins=[x_bins, y_bins])
+    best_means = target_best_df.groupby('step')[['mx', 'my']].mean()
+    worst_means = target_worst_df.groupby('step')[['mx', 'my']].mean()
+    merged_means = best_means.join(worst_means, lsuffix='_best', rsuffix='_worst').dropna()
+    merged_means['dist'] = np.sqrt((merged_means['mx_best'] - merged_means['mx_worst'])**2 + (merged_means['my_best'] - merged_means['my_worst'])**2)
+    
+    div_step = merged_means[merged_means['dist'] > 0.05].index.min()
+    div_gen = (div_step + 1) / 1000 if div_step is not pd.NA else 6.0
+    
+    post_best = target_best_df[target_best_df['step'] >= div_step][['mx', 'my']].dropna()
+    post_worst = target_worst_df[target_worst_df['step'] >= div_step][['mx', 'my']].dropna()
+    X_svm = np.vstack([post_best.values, post_worst.values])
+    y_svm = np.array([1]*len(post_best) + [0]*len(post_worst))
+    
+    svm = LinearSVC(random_state=42, C=1.0)
+    svm.fit(X_svm, y_svm)
+    return div_step, div_gen, svm.coef_[0], svm.intercept_[0]
 
-            U, V, Counts = U.T, V.T, Counts.T
+if not infer_separately:
+    # Use Bad Target for inference globally
+    diverge_step, diverge_gen, w, b = infer_separatrix_for_cond(1)
+    print(f"Divergence Generation (from Bad Target): {diverge_gen}")
+    print(f"Separatrix equation: {w[0]:.4f} * mx + {w[1]:.4f} * my + {b:.4f} = 0")
 
-            U_smooth = gaussian_filter(np.nan_to_num(U, 0), sigma=1.0)
-            V_smooth = gaussian_filter(np.nan_to_num(V, 0), sigma=1.0)
+# Use Good Target and Bad Target for plotting flow diagrams
+for target_type, cond_val in [('good', 0), ('bad', 1)]:
+    if infer_separately:
+        diverge_step, diverge_gen, w, b = infer_separatrix_for_cond(cond_val)
+        print(f"Divergence Generation (from {target_type.capitalize()} Target): {diverge_gen}")
+        print(f"Separatrix equation: {w[0]:.4f} * mx + {w[1]:.4f} * my + {b:.4f} = 0")
+    target_best_groups = cluster_groups_by_cond[cond_val][5]
+    target_worst_groups = cluster_groups_by_cond[cond_val][0]
 
-            mask = Counts < 2
-            U_masked = ma.array(U_smooth, mask=mask)
-            V_masked = ma.array(V_smooth, mask=mask)
+    target_clusters = [
+        ("Cluster 1 (Best)", target_best_groups, 'Blues'),
+        ("Cluster 6 (Worst)", target_worst_groups, 'Reds')
+    ]
 
-            density = gaussian_filter(Counts, sigma=1.5)
-            density_masked = ma.array(density, mask=mask)
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))
+    H = np.sqrt(3)/2
 
-            try:
-                ax.streamplot(X, Y, U_masked, V_masked, color=density_masked, cmap=cmap, 
-                              linewidth=1.5, density=2.5, arrowsize=1.5, zorder=2)
-            except ValueError:
-                pass
-                
-        # Draw Separatrix
-        ax.plot(sep_x, sep_y, color='black', linestyle='--', linewidth=2.5, zorder=5, label='Inferred Separatrix' if col == 1 else "")
-                
-        ax.text(0.5, H + 0.02, "Social", ha='center', va='bottom', fontsize=14, weight='bold')
-        ax.text(0.1, -0.02, "Private", ha='right', va='top', fontsize=14, weight='bold')
-        ax.text(0.9, -0.02, "None", ha='left', va='top', fontsize=14, weight='bold')
+    periods = [
+        (f'Gen 0-{int(diverge_gen)} (Pre-Divergence)', lambda d: d['step'] < diverge_step),
+        (f'Gen {int(diverge_gen)}-100 (Post-Divergence)', lambda d: d['step'] >= diverge_step)
+    ]
+
+    grid_res = 50
+    x_bins = np.linspace(-0.05, 1.05, grid_res)
+    y_bins = np.linspace(-0.05, H + 0.05, grid_res)
+    X, Y = np.meshgrid(x_bins[:-1] + np.diff(x_bins)/2, y_bins[:-1] + np.diff(y_bins)/2)
+
+    sep_x = np.linspace(0, 1, 500)
+    sep_y = -(w[0] * sep_x + b) / (w[1] + 1e-10)
+
+    # Mask separatrix to triangle bounds
+    mask_triangle = (sep_y >= 0) & (sep_y <= np.sqrt(3) * sep_x) & (sep_y <= -np.sqrt(3) * (sep_x - 1))
+    sep_x = sep_x[mask_triangle]
+    sep_y = sep_y[mask_triangle]
+
+    for row, (cluster_title, groups, cmap) in enumerate(target_clusters):
+        cluster_df = df_gs_all[df_gs_all['unique_group'].isin(groups)].copy()
         
-        ax.axis('off')
-        ax.set_aspect('equal')
+        cluster_df = cluster_df.sort_values(['run_id', 'group_id', 'step'])
+        cluster_df['dmx'] = cluster_df.groupby(['run_id', 'group_id'])['mx'].diff()
+        cluster_df['dmy'] = cluster_df.groupby(['run_id', 'group_id'])['my'].diff()
         
-        if row == 0:
-            ax.set_title(period_title, fontsize=20, weight='bold', pad=15)
+        for col, (period_title, filter_func) in enumerate(periods):
+            ax = axes[row, col]
             
-        if col == 0:
-            ax.text(-0.2, H/2, cluster_title, va='center', ha='right', rotation=90, fontsize=20, weight='bold')
+            triangle = Polygon([[0, 0], [1, 0], [0.5, H]], fill=False, edgecolor='black', linewidth=2.5, zorder=4)
+            ax.add_patch(triangle)
             
-        if col == 1 and row == 0:
-            ax.legend(loc='upper right', fontsize=12)
+            phase_data = cluster_df[filter_func(cluster_df)].dropna(subset=['dmx', 'dmy'])
+            
+            if len(phase_data) > 0:
+                U, _, _, _ = binned_statistic_2d(phase_data['mx'], phase_data['my'], phase_data['dmx'], statistic='mean', bins=[x_bins, y_bins])
+                V, _, _, _ = binned_statistic_2d(phase_data['mx'], phase_data['my'], phase_data['dmy'], statistic='mean', bins=[x_bins, y_bins])
+                Counts, _, _, _ = binned_statistic_2d(phase_data['mx'], phase_data['my'], phase_data['dmx'], statistic='count', bins=[x_bins, y_bins])
 
-plt.tight_layout()
-plt.subplots_adjust(top=0.9, left=0.15, wspace=0.1, hspace=0.1)
-plt.suptitle("Flow Diagrams (Bad Target Initialization)", fontsize=24, weight='bold')
-plt.savefig('flow_clusters_1_6_bad_target.pdf', dpi=300, bbox_inches='tight')
-# # plt.show()
-plt.close(fig)
+                U, V, Counts = U.T, V.T, Counts.T
+
+                U_smooth = gaussian_filter(np.nan_to_num(U, 0), sigma=1.5)
+                V_smooth = gaussian_filter(np.nan_to_num(V, 0), sigma=1.5)
+
+                # Ensure arrows are visible for small clusters by masking based on smoothed density
+                arrow_density = gaussian_filter(Counts, sigma=1.5)
+                threshold = arrow_density.max() * 0.15
+                mask = arrow_density < threshold
+                U_masked = ma.array(U_smooth, mask=mask)
+                V_masked = ma.array(V_smooth, mask=mask)
+
+                # Add background smooth heatmap showing distribution at the END of the period
+                end_data = phase_data.groupby(['run_id', 'group_id']).last().reset_index()
+                Counts_end, _, _, _ = binned_statistic_2d(end_data['mx'], end_data['my'], end_data['mx'], statistic='count', bins=[x_bins, y_bins])
+                Counts_end = Counts_end.T
+                density_end = gaussian_filter(Counts_end, sigma=1.5)
+                
+                heatmap_data = ma.array(density_end, mask=(density_end < 1e-4))
+                extent = [x_bins.min(), x_bins.max(), y_bins.min(), y_bins.max()]
+                mesh = ax.imshow(heatmap_data, extent=extent, origin='lower', cmap=cmap, alpha=0.6, interpolation='bilinear', zorder=1)
+                mesh.set_clip_path(triangle)
+
+                try:
+                    stream = ax.streamplot(X, Y, U_masked, V_masked, color='black', 
+                                  linewidth=1.5, density=1.5, arrowsize=1.5, zorder=2)
+                    stream.lines.set_clip_path(triangle)
+                    stream.arrows.set_clip_path(triangle)
+                except ValueError:
+                    pass
+                    
+            # Draw Separatrix
+            ax.plot(sep_x, sep_y, color='black', linestyle='--', linewidth=2.5, zorder=5, label='Inferred Separatrix' if col == 1 else "")
+                    
+            ax.text(0.5, H + 0.02, "Social", ha='center', va='bottom', fontsize=14, weight='bold')
+            ax.text(0.1, -0.02, "Private", ha='right', va='top', fontsize=14, weight='bold')
+            ax.text(0.9, -0.02, "None", ha='left', va='top', fontsize=14, weight='bold')
+            
+            ax.axis('off')
+            ax.set_aspect('equal')
+            
+            if row == 0:
+                ax.set_title(period_title, fontsize=20, pad=15) # , weight='bold'
+                
+            if col == 0:
+                ax.text(-0.2, H/2, cluster_title, va='center', ha='right', rotation=90, fontsize=20) # weight='bold'
+                
+            if col == 1 and row == 0:
+                ax.legend(loc='upper right', fontsize=12)
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9, left=0.15, wspace=0.1, hspace=0.1)
+    plt.suptitle(f"Flow Diagrams ({target_type.capitalize()} Target Initialization)", fontsize=24) # , weight='bold'
+    plt.savefig(f'figures/flow_clusters_1_6_{target_type}_target.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'figures/flow_clusters_1_6_{target_type}_target.pdf', dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+import matplotlib.image as mpimg
+
+def combine_figures(img_a_path, img_b_path, out_pdf_path, orientation='horizontal'):
+    img_a = mpimg.imread(img_a_path)
+    img_b = mpimg.imread(img_b_path)
+    
+    if orientation == 'horizontal':
+        fig, axes = plt.subplots(1, 2, figsize=(40, 20))
+    else:
+        fig, axes = plt.subplots(2, 1, figsize=(38, 44))
+        
+    axes[0].imshow(img_a)
+    axes[0].axis('off')
+    axes[0].text(0.02, 0.98, 'A', transform=axes[0].transAxes, fontsize=80, va='top')  # , weight='bold'
+    
+    axes[1].imshow(img_b)
+    axes[1].axis('off')
+    axes[1].text(0.02, 0.98, 'B', transform=axes[1].transAxes, fontsize=80, va='top') # , weight='bold'
+    
+    if orientation == 'horizontal':
+        plt.subplots_adjust(left=0.02, right=0.98, bottom=0.02, top=0.98, wspace=0.05)
+    else:
+        plt.subplots_adjust(left=0.02, right=0.98, bottom=0.02, top=0.98, hspace=0.02)
+        
+    plt.savefig(out_pdf_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+print("Combining final figures...")
+# combine_figures('figures/clustered_trajectories_gene_ts_perf_good.png', 
+#                 'figures/clustered_trajectories_gene_ts_perf_bad.png', 
+#                 'figures/combined_trajectories.pdf', orientation='vertical')
+
+# combine_figures('figures/flow_clusters_1_6_good_target.png', 
+#                 'figures/flow_clusters_1_6_bad_target.png', 
+#                 'figures/combined_flow.pdf', orientation='horizontal')
+print("Done! All figures are saved in the 'figures' folder.")
