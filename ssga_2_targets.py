@@ -123,6 +123,31 @@ def run_ssga(cfg: DictConfig):
                         "tick/avg_prob_none": avg_probs[2],
                         "tick/avg_eve": avg_eve
                     }, step=total_ticks + step_idx)
+                
+                if "good_target_dist" in rollouts["next", "agents", "info"]:
+                    good_dist = rollouts["next", "agents", "info", "good_target_dist"] # [Islands, Steps, Agents]
+                    bad_dist = rollouts["next", "agents", "info", "bad_target_dist"]
+                    
+                    good_dist_flat = good_dist.transpose(0, 1).reshape(eval_interval, -1)
+                    bad_dist_flat = bad_dist.transpose(0, 1).reshape(eval_interval, -1)
+                    
+                    mean_good = good_dist_flat.mean(dim=1).cpu().tolist()
+                    sd_good = good_dist_flat.std(dim=1).cpu().tolist()
+                    median_good = good_dist_flat.median(dim=1).values.cpu().tolist()
+                    
+                    mean_bad = bad_dist_flat.mean(dim=1).cpu().tolist()
+                    sd_bad = bad_dist_flat.std(dim=1).cpu().tolist()
+                    median_bad = bad_dist_flat.median(dim=1).values.cpu().tolist()
+                    
+                    dist_table = wandb.Table(columns=["tick", "mean_good_dist", "sd_good_dist", "median_good_dist", 
+                                                      "mean_bad_dist", "sd_bad_dist", "median_bad_dist"])
+                    
+                    for step_idx in range(eval_interval):
+                        tick = total_ticks + step_idx
+                        dist_table.add_data(tick, mean_good[step_idx], sd_good[step_idx], median_good[step_idx],
+                                            mean_bad[step_idx], sd_bad[step_idx], median_bad[step_idx])
+                    
+                    wandb.log({"distances_table": dist_table}, step=total_ticks + eval_interval - 1)
             
             # 2. Price Equation Components
             

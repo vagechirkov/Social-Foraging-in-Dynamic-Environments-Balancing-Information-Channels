@@ -307,6 +307,21 @@ class Scenario(BaseScenario):
             info["channel_costs_reward"] = agent.channel_costs_reward
             info["collision_reward"] = agent.collision_reward
             
+            # calculate distance to good and bad targets
+            if getattr(self, "target_agents", None) and len(self.target_agents) >= 2:
+                t1, t2 = self.target_agents[0], self.target_agents[1]
+                t1_q = getattr(t1, 'quality', torch.tensor([0.0])).mean().item()
+                t2_q = getattr(t2, 'quality', torch.tensor([0.0])).mean().item()
+                if t1_q > t2_q:
+                    good_target, bad_target = t1, t2
+                else:
+                    good_target, bad_target = t2, t1
+                
+                good_dist = torch.linalg.norm(agent.state.pos - good_target.state.pos, dim=-1)
+                bad_dist = torch.linalg.norm(agent.state.pos - bad_target.state.pos, dim=-1)
+                info["good_target_dist"] = good_dist
+                info["bad_target_dist"] = bad_dist
+            
             covs = getattr(agent, "belief_target_covariance", None)
             if covs is not None:
                 det = (covs[..., 0, 0] * covs[..., 1, 1]) - (covs[..., 0, 1] * covs[..., 1, 0])
@@ -320,6 +335,8 @@ class Scenario(BaseScenario):
             info["channel_costs_reward"] = z
             info["collision_reward"] = z
             info["belief_uncertainty"] = z
+            info["good_target_dist"] = z
+            info["bad_target_dist"] = z
         return info
 
     def observation(self, agent: Agent):

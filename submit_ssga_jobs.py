@@ -14,7 +14,7 @@ def submit_ssga_jobs():
     history_reset_list = [False]  # True, 
     mls_list = [False] # , True
     scenario_types = ["one_close_one_far"] # , "none"
-    env_dims = [2, 4]
+    env_dims = [4]
     close_target_indices = [0, 1]
     respawn_modes = ["group_center"]  # "random", 
 
