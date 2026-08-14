@@ -157,3 +157,18 @@ uv run python abm/generate_videos.py --seed 42 --category info_constrained --p_p
 ```bash
 rm job_*
 ```
+
+## Reproducing SSGA Trajectories and Distance Stream Plots
+
+To reproduce the plots with the newly generated WandB runs (e.g. `z4tj0t0b` and `q7nlm6xo`), run the following commands sequentially:
+
+1. Download and merge the data (both agent statistics and target distances):
+```bash
+uv run python download_and_merge_wandb_data.py
+```
+
+2. Generate the trajectories, stream plots (in gene and distance space), and grouped heatmaps:
+```bash
+uv run python generate_trajectories_plot.py
+```
+The figures will be saved in the `figures/` directory.

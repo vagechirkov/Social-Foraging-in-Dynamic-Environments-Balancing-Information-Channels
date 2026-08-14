@@ -19,7 +19,8 @@ load_dotenv()
 
 # Construct the path using WANDB_DIR
 wandb_dir = os.environ.get("WANDB_DIR", "./")
-data_path = os.path.join(wandb_dir, "data", "lck2wafo_dment0yi", "merged_agent_stats.parquet")
+data_path = os.path.join(wandb_dir, "data", "q7nlm6xo_z4tj0t0b", "merged_agent_stats.parquet")
+dist_data_path = os.path.join(wandb_dir, "data", "q7nlm6xo_z4tj0t0b", "merged_group_distances.parquet")
 
 print(f"Loading data from {data_path}...")
 try:
@@ -170,10 +171,15 @@ for i, cond in enumerate(conditions):
 
     extent = [heatmap_cols.min()/1000, heatmap_cols.max()/1000, 0, heatmap_data.shape[0]]
     
+    custom_perf_cmap = mcolors.LinearSegmentedColormap.from_list('custom_perf', [
+        '#8e0152', '#c51b7d', '#de77ae', '#f1b6da', '#fde0ef', '#f7f7f7',
+        '#e6f5d0', '#b8e186', '#7fbc41', '#4d9221', '#276419'
+    ])
+    
     cax = ax_main.imshow(
         heatmap_data, 
         aspect='auto', 
-        cmap=custom_cmap, 
+        cmap=custom_perf_cmap, 
         interpolation='none', 
         extent=extent, 
         origin='lower', 
@@ -458,39 +464,105 @@ for target_type, cond_val in [('good', 0), ('bad', 1)]:
     plt.savefig(f'figures/flow_clusters_1_6_{target_type}_target.pdf', dpi=300, bbox_inches='tight')
     plt.close(fig)
 
-import matplotlib.image as mpimg
 
-def combine_figures(img_a_path, img_b_path, out_pdf_path, orientation='horizontal'):
-    img_a = mpimg.imread(img_a_path)
-    img_b = mpimg.imread(img_b_path)
+print("Generating distance stream plots...")
+try:
+    df_dist = pd.read_parquet(dist_data_path)
+except FileNotFoundError:
+    print(f"Distances data not found at {dist_data_path}. Skipping distance stream plots.")
+    df_dist = None
+
+if df_dist is not None:
+    # We want a stream plot: X-axis = mean_good_dist, Y-axis = mean_bad_dist
+    df_dist['unique_group'] = df_dist['run_id'].astype(str) + '_' + df_dist['group_id'].astype(str)
+    df_dist = df_dist.sort_values(['unique_group', 'tick'])
     
-    if orientation == 'horizontal':
-        fig, axes = plt.subplots(1, 2, figsize=(40, 20))
-    else:
-        fig, axes = plt.subplots(2, 1, figsize=(38, 44))
+    # Calculate differentials
+    df_dist['d_good'] = df_dist.groupby(['unique_group'])['mean_good_dist'].diff()
+    df_dist['d_bad'] = df_dist.groupby(['unique_group'])['mean_bad_dist'].diff()
+    
+    # Filter valid rows
+    df_dist = df_dist.dropna(subset=['d_good', 'd_bad'])
+    
+    periods_dist = [
+        ('Gen 0-5', lambda d: d['tick'] < 5000),
+        ('Gen 5-100', lambda d: (d['tick'] >= 5000) & (d['tick'] < 100000))
+    ]
+    
+    max_dist = max(df_dist['mean_good_dist'].max(), df_dist['mean_bad_dist'].max()) * 1.1
+    grid_res = 50
+    x_bins_dist = np.linspace(0, max_dist, grid_res)
+    y_bins_dist = np.linspace(0, max_dist, grid_res)
+    X_d, Y_d = np.meshgrid(x_bins_dist[:-1] + np.diff(x_bins_dist)/2, y_bins_dist[:-1] + np.diff(y_bins_dist)/2)
+    
+    for target_type, cond_val in [('good', 0), ('bad', 1)]:
+        cond_df = df_dist[df_dist['close_target_index'] == cond_val]
+        if len(cond_df) == 0:
+            continue
+            
+        target_best_groups = cluster_groups_by_cond[cond_val][5]
+        target_mid_groups = []
+        for i in range(1, 5):
+            target_mid_groups.extend(cluster_groups_by_cond[cond_val][i])
+        target_worst_groups = cluster_groups_by_cond[cond_val][0]
+
+        target_clusters = [
+            ("Cluster 1 (Best)", target_best_groups, 'Blues'),
+            ("Clusters 2-5", target_mid_groups, 'Greens'),
+            ("Cluster 6 (Worst)", target_worst_groups, 'Reds')
+        ]
         
-    axes[0].imshow(img_a)
-    axes[0].axis('off')
-    axes[0].text(0.02, 0.98, 'A', transform=axes[0].transAxes, fontsize=80, va='top')  # , weight='bold'
-    
-    axes[1].imshow(img_b)
-    axes[1].axis('off')
-    axes[1].text(0.02, 0.98, 'B', transform=axes[1].transAxes, fontsize=80, va='top') # , weight='bold'
-    
-    if orientation == 'horizontal':
-        plt.subplots_adjust(left=0.02, right=0.98, bottom=0.02, top=0.98, wspace=0.05)
-    else:
-        plt.subplots_adjust(left=0.02, right=0.98, bottom=0.02, top=0.98, hspace=0.02)
+        fig, axes = plt.subplots(len(target_clusters), len(periods_dist), figsize=(6 * len(periods_dist), 6 * len(target_clusters)))
         
-    plt.savefig(out_pdf_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
+        for row, (cluster_label, target_groups, cmap_name) in enumerate(target_clusters):
+            cluster_df = cond_df[cond_df['unique_group'].isin(target_groups)]
+            
+            for col, (period_title, filter_func) in enumerate(periods_dist):
+                ax = axes[row, col]
+                phase_data = cluster_df[filter_func(cluster_df)]
+                
+                if len(phase_data) > 0:
+                    U, _, _, _ = binned_statistic_2d(phase_data['mean_good_dist'], phase_data['mean_bad_dist'], phase_data['d_good'], statistic='mean', bins=[x_bins_dist, y_bins_dist])
+                    V, _, _, _ = binned_statistic_2d(phase_data['mean_good_dist'], phase_data['mean_bad_dist'], phase_data['d_bad'], statistic='mean', bins=[x_bins_dist, y_bins_dist])
+                    Counts, _, _, _ = binned_statistic_2d(phase_data['mean_good_dist'], phase_data['mean_bad_dist'], phase_data['d_good'], statistic='count', bins=[x_bins_dist, y_bins_dist])
 
-print("Combining final figures...")
-# combine_figures('figures/clustered_trajectories_gene_ts_perf_good.png', 
-#                 'figures/clustered_trajectories_gene_ts_perf_bad.png', 
-#                 'figures/combined_trajectories.pdf', orientation='vertical')
+                    U, V, Counts = U.T, V.T, Counts.T
 
-# combine_figures('figures/flow_clusters_1_6_good_target.png', 
-#                 'figures/flow_clusters_1_6_bad_target.png', 
-#                 'figures/combined_flow.pdf', orientation='horizontal')
+                    # Reduced smoothing
+                    U_smooth = gaussian_filter(np.nan_to_num(U, 0), sigma=0.8)
+                    V_smooth = gaussian_filter(np.nan_to_num(V, 0), sigma=0.8)
+
+                    arrow_density = gaussian_filter(Counts, sigma=0.8)
+                    threshold = arrow_density.max() * 0.15
+                    mask = arrow_density < threshold
+                    U_masked = ma.array(U_smooth, mask=mask)
+                    V_masked = ma.array(V_smooth, mask=mask)
+
+                    heatmap_data = ma.array(arrow_density, mask=(arrow_density < 1e-4))
+                    extent = [0, max_dist, 0, max_dist]
+                    ax.imshow(heatmap_data, extent=extent, origin='lower', cmap='Purples', alpha=0.6, interpolation='bilinear', zorder=1)
+
+                    try:
+                        ax.streamplot(X_d, Y_d, U_masked, V_masked, color='black', 
+                                      linewidth=1.2, density=1.5, arrowsize=1.2, zorder=2)
+                    except ValueError:
+                        pass
+
+                ax.set_xlim(0, max_dist)
+                ax.set_ylim(0, max_dist)
+                if row == len(target_clusters) - 1:
+                    ax.set_xlabel("Mean Distance to Good Target", fontsize=14)
+                if col == 0:
+                    ax.set_ylabel(f"{cluster_label}\nMean Distance to Bad Target", fontsize=14)
+                ax.set_aspect('equal')
+                if row == 0:
+                    ax.set_title(period_title, fontsize=16, pad=15)
+                ax.grid(True, linestyle='--', alpha=0.5)
+
+        plt.suptitle(f"Distance Stream Plots ({target_type.capitalize()} Target Initialization)", fontsize=20)
+        plt.tight_layout()
+        plt.savefig(f'figures/distance_flow_{target_type}_target.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'figures/distance_flow_{target_type}_target.pdf', dpi=300, bbox_inches='tight')
+        plt.close(fig)
+
 print("Done! All figures are saved in the 'figures' folder.")

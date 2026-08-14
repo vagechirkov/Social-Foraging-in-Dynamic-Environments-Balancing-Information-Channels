@@ -2,6 +2,8 @@ import hydra
 import torch
 import wandb
 import numpy as np
+import pandas as pd
+import os
 from omegaconf import DictConfig
 from tensordict import TensorDict
 from tensordict.nn import TensorDictModule
@@ -127,27 +129,42 @@ def run_ssga(cfg: DictConfig):
                 if "good_target_dist" in rollouts["next", "agents", "info"]:
                     good_dist = rollouts["next", "agents", "info", "good_target_dist"] # [Islands, Steps, Agents]
                     bad_dist = rollouts["next", "agents", "info", "bad_target_dist"]
-                    
-                    good_dist_flat = good_dist.transpose(0, 1).reshape(eval_interval, -1)
-                    bad_dist_flat = bad_dist.transpose(0, 1).reshape(eval_interval, -1)
-                    
-                    mean_good = good_dist_flat.mean(dim=1).cpu().tolist()
-                    sd_good = good_dist_flat.std(dim=1).cpu().tolist()
-                    median_good = good_dist_flat.median(dim=1).values.cpu().tolist()
-                    
-                    mean_bad = bad_dist_flat.mean(dim=1).cpu().tolist()
-                    sd_bad = bad_dist_flat.std(dim=1).cpu().tolist()
-                    median_bad = bad_dist_flat.median(dim=1).values.cpu().tolist()
-                    
-                    dist_table = wandb.Table(columns=["tick", "mean_good_dist", "sd_good_dist", "median_good_dist", 
-                                                      "mean_bad_dist", "sd_bad_dist", "median_bad_dist"])
-                    
-                    for step_idx in range(eval_interval):
-                        tick = total_ticks + step_idx
-                        dist_table.add_data(tick, mean_good[step_idx], sd_good[step_idx], median_good[step_idx],
-                                            mean_bad[step_idx], sd_bad[step_idx], median_bad[step_idx])
-                    
-                    wandb.log({"distances_table": dist_table}, step=total_ticks + eval_interval - 1)
+
+                    if getattr(cfg, "save_group_distances", True):
+                        # Calculate group-level distances: mean and median over agents (dim=2)
+                        # Result shape: [Islands, Steps]
+                        group_mean_good = good_dist.mean(dim=2).cpu().numpy()
+                        group_median_good = good_dist.median(dim=2).values.cpu().numpy()
+                        group_mean_bad = bad_dist.mean(dim=2).cpu().numpy()
+                        group_median_bad = bad_dist.median(dim=2).values.cpu().numpy()
+
+                        # Flatten and prepare for dataframe
+                        islands_arr = np.repeat(np.arange(n_islands), eval_interval)
+                        steps_arr = np.tile(np.arange(eval_interval), n_islands)
+                        ticks_arr = total_ticks + steps_arr
+
+                        df_group_dist = pd.DataFrame({
+                            'tick': ticks_arr.astype(np.int32),
+                            'group_id': islands_arr.astype(np.int16),
+                            'mean_good_dist': group_mean_good.flatten().astype(np.float32),
+                            'median_good_dist': group_median_good.flatten().astype(np.float32),
+                            'mean_bad_dist': group_mean_bad.flatten().astype(np.float32),
+                            'median_bad_dist': group_median_bad.flatten().astype(np.float32)
+                        })
+
+                        gen_idx = total_ticks // eval_interval
+                        run_id = wandb.run.id if wandb.run is not None else "local"
+                        temp_file = f"group_distances_{run_id}_gen_{gen_idx}.parquet"
+                        df_group_dist.to_parquet(temp_file, index=False)
+
+                        # Log as WandB artifact
+                        artifact = wandb.Artifact(name=f"group_distances_{run_id}_gen_{gen_idx}", type="dataset")
+                        artifact.add_file(temp_file)
+                        wandb.log_artifact(artifact)
+                        
+                        # Cleanup temp file
+                        if os.path.exists(temp_file):
+                            os.remove(temp_file)
             
             # 2. Price Equation Components
             

@@ -5,6 +5,7 @@ use_gpu: True
 use_wandb: True
 seed: 42
 log_freq: 1
+save_group_distances: True
 eve_min: 0.01
 eve_max: 0.1
 init_strategy: "middle"
