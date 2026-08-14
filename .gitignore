@@ -536,3 +536,5 @@ best_env_params.yaml
 .venv2/
 *.pdf
 docs/
+analyze_data.ipynb
+reproduce_image.ipynb
