@@ -151,6 +151,9 @@ uv run python abm/generate_videos.py --seed 42 --category collective --p_private
 uv run python abm/generate_videos.py --seed 42 --category info_constrained --p_private 0.1 --p_social 0.1 --p_none 0.8 --max_steps 1000
 ```
 
+```bash
+python submit_ssga_jobs.py 
+```
 
 ## Clean up repo
 
