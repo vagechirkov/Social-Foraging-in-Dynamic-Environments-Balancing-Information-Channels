@@ -19,8 +19,8 @@ load_dotenv()
 
 # Construct the path using WANDB_DIR
 wandb_dir = os.environ.get("WANDB_DIR", "./")
-data_path = os.path.join(wandb_dir, "data", "q7nlm6xo_z4tj0t0b", "merged_agent_stats.parquet")
-dist_data_path = os.path.join(wandb_dir, "data", "q7nlm6xo_z4tj0t0b", "merged_group_distances.parquet")
+data_path = os.path.join(wandb_dir, "data", "v9arred3_jmrbbem4", "merged_agent_stats.parquet")
+dist_data_path = os.path.join(wandb_dir, "data", "v9arred3_jmrbbem4", "merged_group_distances.parquet")
 
 print(f"Loading data from {data_path}...")
 try:
@@ -33,6 +33,10 @@ except FileNotFoundError:
     df = pd.read_csv(csv_path)
 
 print(f"Dataset shape: {df.shape}")
+
+# Ensure group_id is always an integer to avoid '0.0' vs '0' mismatch
+if 'group_id' in df.columns:
+    df['group_id'] = df['group_id'].astype(float).astype(int)
 
 # Filter for the requested condition
 # df_flow = df[df['close_target_index'] == 1].copy()
@@ -473,96 +477,174 @@ except FileNotFoundError:
     df_dist = None
 
 if df_dist is not None:
+    if 'group_id' in df_dist.columns:
+        df_dist['group_id'] = df_dist['group_id'].astype(float).astype(int)
+        
     # We want a stream plot: X-axis = mean_good_dist, Y-axis = mean_bad_dist
     df_dist['unique_group'] = df_dist['run_id'].astype(str) + '_' + df_dist['group_id'].astype(str)
     df_dist = df_dist.sort_values(['unique_group', 'tick'])
     
     # Calculate differentials
-    df_dist['d_good'] = df_dist.groupby(['unique_group'])['mean_good_dist'].diff()
-    df_dist['d_bad'] = df_dist.groupby(['unique_group'])['mean_bad_dist'].diff()
+    df_dist['d_good'] = df_dist.groupby(['unique_group'])['median_good_dist'].diff()
+    df_dist['d_bad'] = df_dist.groupby(['unique_group'])['median_bad_dist'].diff()
     
     # Filter valid rows
     df_dist = df_dist.dropna(subset=['d_good', 'd_bad'])
     
-    periods_dist = [
-        ('Gen 0-5', lambda d: d['tick'] < 5000),
-        ('Gen 5-100', lambda d: (d['tick'] >= 5000) & (d['tick'] < 100000))
-    ]
-    
     max_dist = max(df_dist['mean_good_dist'].max(), df_dist['mean_bad_dist'].max()) * 1.1
-    grid_res = 50
-    x_bins_dist = np.linspace(0, max_dist, grid_res)
-    y_bins_dist = np.linspace(0, max_dist, grid_res)
-    X_d, Y_d = np.meshgrid(x_bins_dist[:-1] + np.diff(x_bins_dist)/2, y_bins_dist[:-1] + np.diff(y_bins_dist)/2)
     
-    for target_type, cond_val in [('good', 0), ('bad', 1)]:
+    from matplotlib.collections import LineCollection
+    from sklearn.cluster import KMeans
+
+    print("Generating average trajectories colored by time (clustered by trajectory)...")
+    
+    for max_tick, suffix in [(10000, "0_to_10k"), (30000, "0_to_30k")]:
+        phase_data_filtered = df_dist[df_dist['tick'] <= max_tick].copy()
+        
+        fig, axes = plt.subplots(1, 2, figsize=(16, 8))
+        cond_titles = {0: "Init on Good Target", 1: "Init on Bad Target"}
+        
+        for col, cond_val in enumerate([0, 1]):
+            ax = axes[col]
+            phase_data = phase_data_filtered[phase_data_filtered['close_target_index'] == cond_val].copy()
+            
+            if len(phase_data) == 0:
+                continue
+                
+            # Cluster trajectories in distance space for this condition
+            pivot_good = phase_data.groupby(['unique_group', 'tick'])['mean_good_dist'].mean().unstack(level='tick')
+            pivot_bad = phase_data.groupby(['unique_group', 'tick'])['mean_bad_dist'].mean().unstack(level='tick')
+            
+            pivot_good = pivot_good.ffill(axis=1).bfill(axis=1)
+            pivot_bad = pivot_bad.ffill(axis=1).bfill(axis=1)
+            
+            X = np.hstack([pivot_good.values, pivot_bad.values])
+            X = np.nan_to_num(X, nan=0.0)
+            
+            kmeans = KMeans(n_clusters=6, random_state=42, n_init=10)
+            labels = kmeans.fit_predict(X)
+            
+            groups = pivot_good.index.values
+            cluster_map = {grp: lbl for grp, lbl in zip(groups, labels)}
+            phase_data['traj_cluster'] = phase_data['unique_group'].map(cluster_map)
+            
+            for c in range(6):
+                cluster_df = phase_data[phase_data['traj_cluster'] == c]
+                if len(cluster_df) == 0: continue
+                
+                # Aggregate by tick
+                agg_df = cluster_df.groupby('tick')[['mean_good_dist', 'mean_bad_dist']].mean().reset_index()
+                
+                # Smooth
+                x = agg_df['mean_good_dist'].rolling(window=10, min_periods=1).mean().values
+                y = agg_df['mean_bad_dist'].rolling(window=10, min_periods=1).mean().values
+                ticks = agg_df['tick'].values
+                
+                points = np.array([x, y]).T.reshape(-1, 1, 2)
+                segments = np.concatenate([points[:-1], points[1:]], axis=1)
+                
+                lc = LineCollection(segments, cmap='viridis', norm=plt.Normalize(ticks.min(), ticks.max()), linewidth=3.5, alpha=0.9)
+                lc.set_array(ticks[:-1])
+                ax.add_collection(lc)
+                
+                # Start and End markers
+                ax.scatter(x[0], y[0], marker='o', color='black', s=80, edgecolor='white', zorder=3)
+                ax.scatter(x[-1], y[-1], marker='X', color='black', s=120, edgecolor='white', zorder=3)
+                ax.text(x[-1], y[-1], f" C{c+1}", fontsize=12, fontweight='bold', color='black', verticalalignment='bottom', zorder=4)
+
+            ax.plot([0, max_dist], [0, max_dist], 'k--', alpha=0.5, label='Equal Distance' if col==0 else "")
+            
+            ax.set_xlim(0, max_dist)
+            ax.set_ylim(0, max_dist)
+            ax.set_xlabel("Mean Distance to Good Target", fontsize=14)
+            if col == 0:
+                ax.set_ylabel("Mean Distance to Bad Target", fontsize=14)
+            ax.set_aspect('equal')
+            ax.set_title(cond_titles[cond_val], fontsize=16, pad=15)
+            ax.grid(True, linestyle='--', alpha=0.5)
+            if col == 0:
+                ax.legend(loc='upper left')
+                
+        # Add colorbar globally to the figure to avoid overlap
+        cbar = fig.colorbar(lc, ax=axes.ravel().tolist(), fraction=0.046, pad=0.04)
+        cbar.set_label("Tick Time")
+
+        plt.savefig(f'figures/distance_average_trajectories_mean_{suffix}.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'figures/distance_average_trajectories_mean_{suffix}.pdf', dpi=300, bbox_inches='tight')
+        plt.close(fig)
+
+    print("Generating aggregated distance over ticks plot...")
+    
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12), sharex=True, sharey=True)
+    
+    for col, cond_val in enumerate([0, 1]):
         cond_df = df_dist[df_dist['close_target_index'] == cond_val]
-        if len(cond_df) == 0:
+        
+        # 1. Isolate tick >= 60k for clustering late-stage behavior
+        late_df = cond_df[cond_df['tick'] >= 60000]
+        if len(late_df) == 0:
             continue
             
-        target_best_groups = cluster_groups_by_cond[cond_val][5]
-        target_mid_groups = []
-        for i in range(1, 5):
-            target_mid_groups.extend(cluster_groups_by_cond[cond_val][i])
-        target_worst_groups = cluster_groups_by_cond[cond_val][0]
-
-        target_clusters = [
-            ("Cluster 1 (Best)", target_best_groups, 'Blues'),
-            ("Clusters 2-5", target_mid_groups, 'Greens'),
-            ("Cluster 6 (Worst)", target_worst_groups, 'Reds')
-        ]
+        # 2. Aggregate distance for each unique_group over late ticks
+        late_agg = late_df.groupby('unique_group')[['mean_good_dist', 'mean_bad_dist']].mean()
         
-        fig, axes = plt.subplots(len(target_clusters), len(periods_dist), figsize=(6 * len(periods_dist), 6 * len(target_clusters)))
+        # 3. Perform KMeans Clustering
+        kmeans = KMeans(n_clusters=4, random_state=42, n_init=10)
+        late_agg['cluster'] = kmeans.fit_predict(late_agg.values)
         
-        for row, (cluster_label, target_groups, cmap_name) in enumerate(target_clusters):
-            cluster_df = cond_df[cond_df['unique_group'].isin(target_groups)]
+        # Sort clusters by distance to good target so colors are consistent across conditions
+        cluster_means = late_agg.groupby('cluster')['mean_good_dist'].mean().sort_values()
+        cmap = {old_id: new_id for new_id, old_id in enumerate(cluster_means.index)}
+        late_agg['cluster'] = late_agg['cluster'].map(cmap)
+        
+        # 4. Map clusters back to the data
+        cluster_map = late_agg['cluster'].to_dict()
+        cond_df = cond_df.copy()
+        cond_df['traj_cluster'] = cond_df['unique_group'].map(cluster_map)
+        
+        colors = ['blue', 'green', 'orange', 'red', 'purple', 'brown']
+        
+        for c in range(4):
+            cluster_df = cond_df[cond_df['traj_cluster'] == c]
             
-            for col, (period_title, filter_func) in enumerate(periods_dist):
-                ax = axes[row, col]
-                phase_data = cluster_df[filter_func(cluster_df)]
-                
-                if len(phase_data) > 0:
-                    U, _, _, _ = binned_statistic_2d(phase_data['mean_good_dist'], phase_data['mean_bad_dist'], phase_data['d_good'], statistic='mean', bins=[x_bins_dist, y_bins_dist])
-                    V, _, _, _ = binned_statistic_2d(phase_data['mean_good_dist'], phase_data['mean_bad_dist'], phase_data['d_bad'], statistic='mean', bins=[x_bins_dist, y_bins_dist])
-                    Counts, _, _, _ = binned_statistic_2d(phase_data['mean_good_dist'], phase_data['mean_bad_dist'], phase_data['d_good'], statistic='count', bins=[x_bins_dist, y_bins_dist])
+            # Limit plotting data to 0-40k
+            cluster_df = cluster_df[cluster_df['tick'] <= 40000]
+            
+            if len(cluster_df) == 0: continue
+            
+            agg_df = cluster_df.groupby('tick').agg({
+                'mean_good_dist': 'mean',
+                'mean_bad_dist': 'mean'
+            })
+            
+            ticks = agg_df.index
+            mean_good = agg_df['mean_good_dist']
+            mean_bad = agg_df['mean_bad_dist']
+            
+            n_groups = len(late_agg[late_agg['cluster'] == c])
+            cluster_label = f"Cluster {c+1} (n={n_groups})"
+            
+            # Row 0: Distance to Good
+            axes[0, col].plot(ticks, mean_good, color=colors[c], linewidth=2.5, label=cluster_label)
+            
+            # Row 1: Distance to Bad
+            axes[1, col].plot(ticks, mean_bad, color=colors[c], linewidth=2.5, label=cluster_label)
 
-                    U, V, Counts = U.T, V.T, Counts.T
-
-                    # Reduced smoothing
-                    U_smooth = gaussian_filter(np.nan_to_num(U, 0), sigma=0.8)
-                    V_smooth = gaussian_filter(np.nan_to_num(V, 0), sigma=0.8)
-
-                    arrow_density = gaussian_filter(Counts, sigma=0.8)
-                    threshold = arrow_density.max() * 0.15
-                    mask = arrow_density < threshold
-                    U_masked = ma.array(U_smooth, mask=mask)
-                    V_masked = ma.array(V_smooth, mask=mask)
-
-                    heatmap_data = ma.array(arrow_density, mask=(arrow_density < 1e-4))
-                    extent = [0, max_dist, 0, max_dist]
-                    ax.imshow(heatmap_data, extent=extent, origin='lower', cmap='Purples', alpha=0.6, interpolation='bilinear', zorder=1)
-
-                    try:
-                        ax.streamplot(X_d, Y_d, U_masked, V_masked, color='black', 
-                                      linewidth=1.2, density=1.5, arrowsize=1.2, zorder=2)
-                    except ValueError:
-                        pass
-
-                ax.set_xlim(0, max_dist)
-                ax.set_ylim(0, max_dist)
-                if row == len(target_clusters) - 1:
-                    ax.set_xlabel("Mean Distance to Good Target", fontsize=14)
-                if col == 0:
-                    ax.set_ylabel(f"{cluster_label}\nMean Distance to Bad Target", fontsize=14)
-                ax.set_aspect('equal')
-                if row == 0:
-                    ax.set_title(period_title, fontsize=16, pad=15)
-                ax.grid(True, linestyle='--', alpha=0.5)
-
-        plt.suptitle(f"Distance Stream Plots ({target_type.capitalize()} Target Initialization)", fontsize=20)
-        plt.tight_layout()
-        plt.savefig(f'figures/distance_flow_{target_type}_target.png', dpi=300, bbox_inches='tight')
-        plt.savefig(f'figures/distance_flow_{target_type}_target.pdf', dpi=300, bbox_inches='tight')
-        plt.close(fig)
+        axes[0, col].set_title(cond_titles[cond_val], fontsize=16)
+        axes[1, col].set_xlabel("Tick", fontsize=14)
+        if col == 0:
+            axes[0, col].set_ylabel("Mean Distance to Good Target", fontsize=14)
+            axes[1, col].set_ylabel("Mean Distance to Bad Target", fontsize=14)
+            
+        axes[0, col].set_xlim(0, 40000)
+        axes[1, col].set_xlim(0, 40000)
+        
+        if col == 0:
+            axes[0, col].legend(loc='upper right')
+            
+    plt.tight_layout()
+    plt.savefig('figures/aggregated_distance_over_ticks_0_to_40000_mean_late_clustered.png', dpi=300, bbox_inches='tight')
+    plt.savefig('figures/aggregated_distance_over_ticks_0_to_40000_mean_late_clustered.pdf', dpi=300, bbox_inches='tight')
+    plt.close(fig)
 
 print("Done! All figures are saved in the 'figures' folder.")

@@ -10,7 +10,7 @@ load_dotenv()
 
 def main():
     api = wandb.Api()
-    runs = ["chirkov/ssga_2_targets/q7nlm6xo", "chirkov/ssga_2_targets/z4tj0t0b"]
+    runs = ["chirkov/ssga_2_targets/v9arred3", "chirkov/ssga_2_targets/jmrbbem4"]
 
     all_dfs = []
     all_group_dist_dfs = []
