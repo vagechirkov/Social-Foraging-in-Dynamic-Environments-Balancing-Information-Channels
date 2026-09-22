@@ -491,14 +491,14 @@ if df_dist is not None:
     # Filter valid rows
     df_dist = df_dist.dropna(subset=['d_good', 'd_bad'])
     
-    max_dist = max(df_dist['mean_good_dist'].max(), df_dist['mean_bad_dist'].max()) * 1.1
+    max_dist = 10  # max(df_dist['mean_good_dist'].max(), df_dist['mean_bad_dist'].max()) * 1.1
     
     from matplotlib.collections import LineCollection
     from sklearn.cluster import KMeans
 
     print("Generating average trajectories colored by time (clustered by trajectory)...")
     
-    for max_tick, suffix in [(10000, "0_to_10k"), (30000, "0_to_30k")]:
+    for max_tick, suffix in [(10000, "0_to_10k"), (25000, "0_to_25k"), (100000, "0_to_100k"), (200000, "0_to_200k")]:
         phase_data_filtered = df_dist[df_dist['tick'] <= max_tick].copy()
         
         fig, axes = plt.subplots(1, 2, figsize=(16, 8))
@@ -511,33 +511,19 @@ if df_dist is not None:
             if len(phase_data) == 0:
                 continue
                 
-            # Cluster trajectories in distance space for this condition
-            pivot_good = phase_data.groupby(['unique_group', 'tick'])['mean_good_dist'].mean().unstack(level='tick')
-            pivot_bad = phase_data.groupby(['unique_group', 'tick'])['mean_bad_dist'].mean().unstack(level='tick')
+            # Use clusters from the performance/genetic space
+            cluster_groups = cluster_groups_by_cond.get(cond_val, [])
             
-            pivot_good = pivot_good.ffill(axis=1).bfill(axis=1)
-            pivot_bad = pivot_bad.ffill(axis=1).bfill(axis=1)
-            
-            X = np.hstack([pivot_good.values, pivot_bad.values])
-            X = np.nan_to_num(X, nan=0.0)
-            
-            kmeans = KMeans(n_clusters=6, random_state=42, n_init=10)
-            labels = kmeans.fit_predict(X)
-            
-            groups = pivot_good.index.values
-            cluster_map = {grp: lbl for grp, lbl in zip(groups, labels)}
-            phase_data['traj_cluster'] = phase_data['unique_group'].map(cluster_map)
-            
-            for c in range(6):
-                cluster_df = phase_data[phase_data['traj_cluster'] == c]
+            for c, groups in enumerate(cluster_groups):
+                cluster_df = phase_data[phase_data['unique_group'].isin(groups)]
                 if len(cluster_df) == 0: continue
                 
                 # Aggregate by tick
                 agg_df = cluster_df.groupby('tick')[['mean_good_dist', 'mean_bad_dist']].mean().reset_index()
                 
                 # Smooth
-                x = agg_df['mean_good_dist'].rolling(window=10, min_periods=1).mean().values
-                y = agg_df['mean_bad_dist'].rolling(window=10, min_periods=1).mean().values
+                x = agg_df['mean_good_dist'].rolling(window=100, min_periods=1).mean().values
+                y = agg_df['mean_bad_dist'].rolling(window=100, min_periods=1).mean().values
                 ticks = agg_df['tick'].values
                 
                 points = np.array([x, y]).T.reshape(-1, 1, 2)
@@ -550,7 +536,7 @@ if df_dist is not None:
                 # Start and End markers
                 ax.scatter(x[0], y[0], marker='o', color='black', s=80, edgecolor='white', zorder=3)
                 ax.scatter(x[-1], y[-1], marker='X', color='black', s=120, edgecolor='white', zorder=3)
-                ax.text(x[-1], y[-1], f" C{c+1}", fontsize=12, fontweight='bold', color='black', verticalalignment='bottom', zorder=4)
+                ax.text(x[-1], y[-1], f" C{6-c}", fontsize=12, fontweight='bold', color='black', verticalalignment='bottom', zorder=4)
 
             ax.plot([0, max_dist], [0, max_dist], 'k--', alpha=0.5, label='Equal Distance' if col==0 else "")
             
