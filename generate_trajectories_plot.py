@@ -82,6 +82,8 @@ import numpy as np
 import matplotlib.colors as mcolors
 import seaborn as sns
 
+
+plot_version = 'v5' # 'v4_10k_clust'
 def draw_streamplot(ax, data, cmap, title, H=np.sqrt(3)/2):
     triangle = Polygon([[0, 0], [1, 0], [0.5, H]], fill=False, edgecolor='black', linewidth=2.5, zorder=4)
     ax.add_patch(triangle)
@@ -127,7 +129,21 @@ n_clusters = 6
 palette = sns.color_palette("coolwarm_r", as_cmap=True)
 custom_cmap = mcolors.LinearSegmentedColormap.from_list('custom', ['#E69F00', '#0072B2'])
 
-print("Generating clustered trajectories based on raw median performance...")
+print("Generating clustered trajectories based on distances to targets over time...")
+
+try:
+    df_dist = pd.read_parquet(dist_data_path)
+except FileNotFoundError:
+    print(f"Distances data not found at {dist_data_path}. Falling back to CSV or skipping.")
+    try:
+        df_dist = pd.read_csv(dist_data_path.replace(".parquet", ".csv.gz"))
+    except FileNotFoundError:
+        df_dist = None
+
+if df_dist is not None:
+    if 'group_id' in df_dist.columns:
+        df_dist['group_id'] = df_dist['group_id'].astype(float).astype(int)
+    df_dist['unique_group'] = df_dist['run_id'].astype(str) + '_' + df_dist['group_id'].astype(str)
 
 conditions = sorted(group_perf['close_target_index'].unique())
 cluster_groups_by_cond = {}
@@ -137,9 +153,63 @@ for i, cond in enumerate(conditions):
     
     heatmap_data = cond_data.pivot(index='unique_group', columns='step', values='current_fitness')
     
-    X_cluster = heatmap_data.fillna(0).values
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10).fit(X_cluster)
-    cluster_labels = kmeans.labels_
+    # === PREVIOUS CLUSTERING CODE (based on median reward) ===
+    # X_cluster = heatmap_data.fillna(0).values
+    # kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10).fit(X_cluster)
+    # cluster_labels = kmeans.labels_
+    # ==========================================================
+    
+    if df_dist is not None and plot_version != 'v5':
+        # dist_good = dist_cond_data.pivot(index='unique_group', columns='tick', values='mean_good_dist')
+        # dist_bad = dist_cond_data.pivot(index='unique_group', columns='tick', values='mean_bad_dist')
+        
+        # # Forward fill in case of missing ticks, then fill remaining NAs with 0
+        # dist_good = dist_good.ffill(axis=1).fillna(0)
+        # dist_bad = dist_bad.ffill(axis=1).fillna(0)
+        
+        # # Align rows exactly with heatmap_data
+        # dist_good = dist_good.reindex(heatmap_data.index).fillna(0)
+        # dist_bad = dist_bad.reindex(heatmap_data.index).fillna(0)
+
+        dist_cond_data = df_dist[df_dist['unique_group'].isin(heatmap_data.index)].copy()
+        
+        # 1. Filter to first 100k ticks
+        dist_100k = dist_cond_data[dist_cond_data['tick'] <= 10_000].copy()
+        
+        # 2. Extract features
+        dist_mean = dist_100k.groupby('unique_group')[['mean_good_dist', 'mean_bad_dist']].mean()
+        dist_mean.columns = ['mean_good', 'mean_bad']
+        
+        # Convergence point (mean over 80k-100k)
+        dist_late = dist_100k[dist_100k['tick'] >= 8000].groupby('unique_group')[['mean_good_dist', 'mean_bad_dist']].mean()
+        dist_late.columns = ['late_good', 'late_bad']
+        
+        # Overall standard deviation
+        dist_std = dist_100k.groupby('unique_group')[['mean_good_dist', 'mean_bad_dist']].std()
+        dist_std.columns = ['std_good', 'std_bad']
+        
+        # Oscillation proxy (std of tick-to-tick changes)
+        dist_100k = dist_100k.sort_values(['unique_group', 'tick'])
+        dist_100k['diff_good'] = dist_100k.groupby('unique_group')['mean_good_dist'].diff()
+        dist_100k['diff_bad'] = dist_100k.groupby('unique_group')['mean_bad_dist'].diff()
+        dist_osc = dist_100k.groupby('unique_group')[['diff_good', 'diff_bad']].std()
+        dist_osc.columns = ['osc_good', 'osc_bad']
+        
+        # Combine features
+        features = dist_mean.join(dist_std) # .join(dist_late).join(dist_osc)
+        features = features.reindex(heatmap_data.index).fillna(0)
+        
+        # Normalize features
+        from sklearn.preprocessing import StandardScaler
+        X_cluster = StandardScaler().fit_transform(features.values)
+        
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10).fit(X_cluster)
+        cluster_labels = kmeans.labels_
+    else:
+        # Fallback if no distance data
+        X_cluster = heatmap_data.fillna(0).values[:, :100_000]
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10).fit(X_cluster)
+        cluster_labels = kmeans.labels_
 
     group_mean_perf = heatmap_data.mean(axis=1).values
     cluster_avg_perf = {c: group_mean_perf[cluster_labels == c].mean() for c in range(n_clusters)}
@@ -298,7 +368,7 @@ for i, cond in enumerate(conditions):
         # draw_streamplot(ax_flow, flow_df, 'Blues', 'Flow Gen 1-7')
 
     os.makedirs('figures', exist_ok=True)
-    filename = f'figures/clustered_trajectories_gene_ts_perf_{"good" if cond == 0 else "bad"}.png'
+    filename = f'figures/clustered_trajectories_gene_ts_perf_{"good" if cond == 0 else "bad"}_{plot_version}.png'
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     plt.savefig(filename.replace('.png', '.pdf'), dpi=300, bbox_inches='tight')
     # # plt.show()
@@ -464,24 +534,16 @@ for target_type, cond_val in [('good', 0), ('bad', 1)]:
     plt.tight_layout()
     plt.subplots_adjust(top=0.9, left=0.15, wspace=0.1, hspace=0.1)
     plt.suptitle(f"Flow Diagrams ({target_type.capitalize()} Target Initialization)", fontsize=24) # , weight='bold'
-    plt.savefig(f'figures/flow_clusters_1_6_{target_type}_target.png', dpi=300, bbox_inches='tight')
-    plt.savefig(f'figures/flow_clusters_1_6_{target_type}_target.pdf', dpi=300, bbox_inches='tight')
+    plt.savefig(f'figures/flow_clusters_1_6_{target_type}_target_{plot_version}.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'figures/flow_clusters_1_6_{target_type}_target_{plot_version}.pdf', dpi=300, bbox_inches='tight')
     plt.close(fig)
 
 
 print("Generating distance stream plots...")
-try:
-    df_dist = pd.read_parquet(dist_data_path)
-except FileNotFoundError:
-    print(f"Distances data not found at {dist_data_path}. Skipping distance stream plots.")
-    df_dist = None
 
 if df_dist is not None:
-    if 'group_id' in df_dist.columns:
-        df_dist['group_id'] = df_dist['group_id'].astype(float).astype(int)
-        
+    # df_dist is already loaded and unique_group is assigned
     # We want a stream plot: X-axis = mean_good_dist, Y-axis = mean_bad_dist
-    df_dist['unique_group'] = df_dist['run_id'].astype(str) + '_' + df_dist['group_id'].astype(str)
     df_dist = df_dist.sort_values(['unique_group', 'tick'])
     
     # Calculate differentials
@@ -518,12 +580,13 @@ if df_dist is not None:
                 cluster_df = phase_data[phase_data['unique_group'].isin(groups)]
                 if len(cluster_df) == 0: continue
                 
+                measure = "median"
                 # Aggregate by tick
-                agg_df = cluster_df.groupby('tick')[['mean_good_dist', 'mean_bad_dist']].mean().reset_index()
+                agg_df = cluster_df.groupby('tick')[[f'{measure}_good_dist', f'{measure}_bad_dist']].mean().reset_index()
                 
                 # Smooth
-                x = agg_df['mean_good_dist'].rolling(window=100, min_periods=1).mean().values
-                y = agg_df['mean_bad_dist'].rolling(window=100, min_periods=1).mean().values
+                x = agg_df[f'{measure}_good_dist'].rolling(window=100, min_periods=1).mean().values
+                y = agg_df[f'{measure}_bad_dist'].rolling(window=100, min_periods=1).mean().values
                 ticks = agg_df['tick'].values
                 
                 points = np.array([x, y]).T.reshape(-1, 1, 2)
@@ -555,8 +618,8 @@ if df_dist is not None:
         cbar = fig.colorbar(lc, ax=axes.ravel().tolist(), fraction=0.046, pad=0.04)
         cbar.set_label("Tick Time")
 
-        plt.savefig(f'figures/distance_average_trajectories_mean_{suffix}.png', dpi=300, bbox_inches='tight')
-        plt.savefig(f'figures/distance_average_trajectories_mean_{suffix}.pdf', dpi=300, bbox_inches='tight')
+        plt.savefig(f'figures/distance_average_trajectories_{measure}_{suffix}_{plot_version}.png', dpi=300, bbox_inches='tight')
+        plt.savefig(f'figures/distance_average_trajectories_{measure}_{suffix}_{plot_version}.pdf', dpi=300, bbox_inches='tight')
         plt.close(fig)
 
     print("Generating aggregated distance over ticks plot...")
@@ -629,8 +692,8 @@ if df_dist is not None:
             axes[0, col].legend(loc='upper right')
             
     plt.tight_layout()
-    plt.savefig('figures/aggregated_distance_over_ticks_0_to_40000_mean_late_clustered.png', dpi=300, bbox_inches='tight')
-    plt.savefig('figures/aggregated_distance_over_ticks_0_to_40000_mean_late_clustered.pdf', dpi=300, bbox_inches='tight')
+    plt.savefig(f'figures/aggregated_distance_over_ticks_0_to_40000_mean_late_clustered_{plot_version}.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'figures/aggregated_distance_over_ticks_0_to_40000_mean_late_clustered_{plot_version}.pdf', dpi=300, bbox_inches='tight')
     plt.close(fig)
 
 print("Done! All figures are saved in the 'figures' folder.")
