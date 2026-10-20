@@ -17,6 +17,10 @@ def submit_ssga_jobs():
     env_dims = [4]
     close_target_indices = [0, 1]
     respawn_modes = ["group_center"]  # "random", 
+    social_fusions = ["naive", "ci", "firsthand"]
+    eval_intervals = [250, 1000, 4000]  # generation length T
+    n_generations = 200  # same number of selection steps under every T
+    trap_block = min(eval_intervals)  # trap status per block of this many ticks, comparable across T
 
     sbatch_script = "ssga_gpu_hpc_scioi.sh"
 
@@ -30,13 +34,15 @@ def submit_ssga_jobs():
     print(f"Environment dimensions: {env_dims}")
     print(f"Close target indices: {close_target_indices}")
     print(f"Respawn modes: {respawn_modes}")
+    print(f"Social fusions: {social_fusions}")
+    print(f"Eval intervals: {eval_intervals} x {n_generations} generations")
     print(f"Using submit script: {sbatch_script}")
 
-    combinations = list(itertools.product(n_agents_list, switch_times, cull_fractions, history_reset_list, mls_list, scenario_types, env_dims, close_target_indices, respawn_modes))
+    combinations = list(itertools.product(n_agents_list, switch_times, cull_fractions, history_reset_list, mls_list, scenario_types, env_dims, close_target_indices, respawn_modes, social_fusions, eval_intervals))
     print(f"Total jobs: {len(combinations)}")
 
-    for n_agents, switch_time, cull_frac, history_reset, mls, scenario_type, env_dim, close_target_idx, respawn_mode in combinations:
-        run_name = f"ssga_st{switch_time}_cf{cull_frac}_nag{n_agents}_hr{history_reset}_mls{mls}_sc{scenario_type}_ed{env_dim}_cti{close_target_idx}_rm{respawn_mode}"
+    for n_agents, switch_time, cull_frac, history_reset, mls, scenario_type, env_dim, close_target_idx, respawn_mode, sf, T in combinations:
+        run_name = f"ssga_st{switch_time}_cf{cull_frac}_nag{n_agents}_hr{history_reset}_mls{mls}_sc{scenario_type}_ed{env_dim}_cti{close_target_idx}_rm{respawn_mode}_sf{sf}_T{T}"
         
         cmd = [
             "sbatch", 
@@ -53,7 +59,13 @@ def submit_ssga_jobs():
             f"x_dim={env_dim}",
             f"y_dim={env_dim}",
             f"use_gpu=True",
-            f"max_ticks={200_000}"
+            f"social_fusion={sf}",
+            f"ssga.eval_interval={T}",
+            f"max_ticks={n_generations * T}",
+            f"trap_block={trap_block}",
+            "env_switch=False",
+            "save_group_distances=False",
+            "fixed_eve=0.055",
         ]
         
         if args.dry_run:

@@ -60,6 +60,7 @@ class ForagingAgent(Agent):
             belief_selectivity_threshold: float = 3.0, # Mahalanobis distance threshold, std squared
             consensus_selectivity_threshold: float = 100.0,
             social_info_aggregation: str = "average",  # "average" or "most_useful"
+            social_fusion: str = "naive",  # "naive", "ci" (covariance intersection) or "firsthand"
             # --- Physics ---
             momentum: float = 0.9,  # alpha: Gradient smoothing
             max_belief_uncertainty: float = 20.0,
@@ -97,6 +98,7 @@ class ForagingAgent(Agent):
         self.belief_selectivity_threshold = belief_selectivity_threshold
         self.consensus_selectivity_threshold = consensus_selectivity_threshold
         self.social_info_aggregation = social_info_aggregation
+        self.social_fusion = social_fusion
         self.max_belief_uncertainty = max_belief_uncertainty
         self.decision_making = decision_making
         self.n_private_samples = n_private_samples
@@ -160,6 +162,14 @@ class ForagingAgent(Agent):
         # Quality Variance sigma^2_{q, i, k}: (batch, n_targets)
         # Initialize with high variance (uncertainty)
         self.belief_target_qual_var = torch.ones(batch_dim, n_targets, device=device)
+
+        # FIRST-HAND BUFFERS (social_fusion == "firsthand")
+        # The agent's most recent private observation, shared instead of its belief
+        self.last_priv_pos = torch.zeros(batch_dim, n_targets, 2, device=device)
+        self.last_priv_cov = torch.eye(2, device=device).repeat(batch_dim, n_targets, 1, 1) * 1e4
+        self.last_priv_qual = torch.zeros(batch_dim, n_targets, device=device)
+        self.last_priv_qual_var = torch.full((batch_dim, n_targets), 1e4, device=device)
+        self.last_priv_mask = torch.zeros(batch_dim, n_targets, dtype=torch.bool, device=device)
 
     def reset_belief(self):
         """Resets the agent's belief to its initial state (randomly distributed within x_dim, y_dim)."""
@@ -395,6 +405,9 @@ class AgentObservations:
             indices = torch.arange(agent.batch_dim, device=device)
         batch_dim = len(indices)
 
+        if agent.social_fusion == "firsthand":
+            return AgentObservations._others_firsthand(agent, other_agents, other_agent_mask, indices)
+
         # 1. Gather neighbor data specifically for the active indices
         # Shape: (batch, n_neighbors, ...)
 
@@ -524,6 +537,39 @@ class AgentObservations:
 
         agent.obs_target_mask[indices] = True
         return target_pos, target_covariance, target_qual, target_qual_var
+
+    @staticmethod
+    def _others_firsthand(agent, other_agents, other_agent_mask, indices):
+        """
+        Observes the most recent PRIVATE observation of a selected neighbor instead of its belief.
+        Agents update in sequence, so the record is from this step or the previous one, never older.
+        """
+        device = agent.device
+        batch_dim = len(indices)
+        sel = other_agent_mask[indices]
+        ar = torch.arange(batch_dim, device=device)
+
+        def gather(name):
+            return torch.stack([getattr(a, name)[indices] for a in other_agents], dim=1)[ar, sel]
+
+        pos, cov = gather("last_priv_pos"), gather("last_priv_cov")
+        q, qv, mask = gather("last_priv_qual"), gather("last_priv_qual_var"), gather("last_priv_mask")
+
+        # Transmission noise, as in the belief channel
+        neighbor_pos = torch.stack([a.state.pos[indices] for a in other_agents], dim=1)[ar, sel]
+        d_ij = torch.norm(agent.state.pos[indices] - neighbor_pos, dim=1)
+        sigma_trans = agent.base_sigma_trans + agent.dist_noise_scale_soc * d_ij  # (batch,)
+        var_trans = sigma_trans ** 2
+
+        pos = pos + torch.randn_like(pos) * sigma_trans.view(-1, 1, 1)
+        cov = cov + var_trans.view(-1, 1, 1, 1) * torch.eye(2, device=device)
+        q = q + torch.randn_like(q) * sigma_trans.view(-1, 1)
+        qv = qv + var_trans.view(-1, 1)
+
+        agent.obs_target_mask[indices] = mask
+        # No certainty filter: first-hand evidence is independent of own belief
+        agent.obs_validity_mask[indices] = mask.any(dim=1)
+        return pos, cov, q, qv
 
     @staticmethod
     def others_heading(agent, other_agents, other_agent_mask, indices=None):
@@ -939,6 +985,9 @@ def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: Li
         #            aggregation_method=agent.social_info_aggregation)
     }
 
+    if agent.social_fusion == "firsthand":
+        agent.last_priv_mask[:] = False
+
     for ch_idx, obs_func in channel_observation_functions.items():
         mask = (channel_indices == ch_idx)
         if mask.any():
@@ -949,6 +998,13 @@ def observe(agent: ForagingAgent, targets: List[ForagingAgent], other_agents: Li
             agent.obs_target_covariance[indices] = c
             agent.obs_target_qual[indices] = q
             agent.obs_target_qual_var[indices] = qv
+
+            if ch_idx == 0 and agent.social_fusion == "firsthand":
+                agent.last_priv_pos[indices] = p
+                agent.last_priv_cov[indices] = c
+                agent.last_priv_qual[indices] = q
+                agent.last_priv_qual_var[indices] = qv
+                agent.last_priv_mask[indices] = agent.obs_target_mask[indices]
 
 
 def add_process_noise_to_belief(agent: ForagingAgent, target_speed):
@@ -1021,6 +1077,14 @@ def update_belief(agent: ForagingAgent):
     sigma_t = agent.belief_target_covariance[update_mask]
     # R_k (Sigma_obs): (batch, n_targets, 2, 2)
     R_k = agent.obs_target_covariance[update_mask]
+
+    # Covariance intersection with equal weights == Kalman step on doubled prior and observation.
+    # The covariance update below then uses the doubled prior, as CI requires.
+    if agent.social_fusion == "ci":
+        is_soc = (agent.action.u[:, 0].long() == 1).unsqueeze(1).expand_as(update_mask)[update_mask]
+        f = 1.0 + is_soc.float()  # 2 for social updates, 1 for private
+        sigma_t = sigma_t * f.view(-1, 1, 1)
+        R_k = R_k * f.view(-1, 1, 1)
     # mu_t: (batch, n_targets, 2)
     mu_t = agent.belief_target_pos[update_mask]
     # z_k: (batch, n_targets, 2)
@@ -1053,6 +1117,9 @@ def update_belief(agent: ForagingAgent):
     sigma_q_t = agent.belief_target_qual_var[update_mask]
     # R_{q,k} (batch, n_targets)
     R_q_k = agent.obs_target_qual_var[update_mask]
+    if agent.social_fusion == "ci":
+        sigma_q_t = sigma_q_t * f
+        R_q_k = R_q_k * f
     # q_t (batch, n_targets)
     q_t = agent.belief_target_qual[update_mask]
     # o_{q,k} (batch, n_targets)

@@ -9,6 +9,12 @@ save_group_distances: True
 eve_min: 0.01
 eve_max: 0.1
 init_strategy: "middle"
+fixed_eve: null      # constant process noise for all agents (not mutated); null = evolving
+
+# Trap tracking (blocks of trap_block ticks; trap_window in blocks)
+on_target_radius: 1.0
+trap_block: 250      # null = ssga.eval_interval; keep equal across runs for comparability
+trap_window: 10
 
 n_envs: 1000        # Number of islands (replicates)
 n_agents: 30       # Agents per island
@@ -44,6 +50,7 @@ spot_radius: 0.25
 p_spatial_explore: 0.0
 belief_selectivity_threshold: 0.25
 decision_making: "greedy"
+social_fusion: "naive"   # "naive", "ci" or "firsthand"
 bias_magnitude: 0.0
 min_dist_between_entities: 0.001
 

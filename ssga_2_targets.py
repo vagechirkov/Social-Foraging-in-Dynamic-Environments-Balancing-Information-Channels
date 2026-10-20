@@ -12,6 +12,30 @@ from torchrl.envs import VmasEnv
 from abm.utils import VmasEvaluator, GenePersistenceTransform, ExperimentLogger
 from abm.utils import N_GENES, CHANNEL_NAMES, step_tensordict
 
+# Per-block group status: on the good target, on the bad target, or on neither
+TRAP_CLASSES = ["good", "bad", "lost"]
+
+
+def block_status(occ_good, occ_bad):
+    """[..., Islands] occupancy fractions -> int8 status (index into TRAP_CLASSES).
+    A group is "on" a target if its median member is within the radius for >50% of the block."""
+    status = np.full(occ_good.shape, 2, dtype=np.int8)
+    status[occ_bad > 0.5] = 1
+    status[occ_good > 0.5] = 0
+    return status
+
+
+def classify_window(status):
+    """[Blocks, Islands] status -> per-group class over the window.
+    Holding (0) if on the good target in most blocks. Otherwise trapped, either on the
+    bad target (1) or on neither (2), whichever is more frequent (ties go to bad)."""
+    on_good = (status == 0).mean(0)
+    on_bad = (status == 1).mean(0)
+    lost = (status == 2).mean(0)
+    cls = np.where(on_bad >= lost, 1, 2).astype(np.int8)
+    cls[on_good > 0.5] = 0
+    return cls
+
 
 @hydra.main(version_base=None, config_path=".", config_name="ssga_2_targets")
 def run_ssga(cfg: DictConfig):
@@ -45,7 +69,13 @@ def run_ssga(cfg: DictConfig):
     else:
         raise ValueError(f"Unknown init_strategy: {cfg.init_strategy}")
     # EVE (3) initialized around 0 (sigmoid(0) = 0.5 -> scaled to ~0.1 process noise)
-    eve_logits = torch.empty(n_islands, n_agents, 1, device=device).normal_(0, 0.5)
+    # fixed_eve: one constant value for all agents, never mutated
+    fixed_eve = getattr(cfg, "fixed_eve", None)
+    if fixed_eve is not None:
+        x = (fixed_eve - cfg.eve_min) / (cfg.eve_max - cfg.eve_min)
+        eve_logits = torch.full((n_islands, n_agents, 1), float(np.log(x / (1 - x))), device=device)
+    else:
+        eve_logits = torch.empty(n_islands, n_agents, 1, device=device).normal_(0, 0.5)
     
     population_genes = torch.cat([channel_logits, eve_logits], dim=-1)
     
@@ -82,6 +112,12 @@ def run_ssga(cfg: DictConfig):
     print(f"Starting SSGA Simulation for {max_ticks} ticks (eval interval: {eval_interval})...")
     
     agent_age = torch.zeros(n_islands, n_agents, device=device)
+
+    # Trap tracking in blocks of trap_block ticks (same for every generation length T)
+    trap_block = cfg.trap_block or eval_interval
+    assert eval_interval % trap_block == 0, "ssga.eval_interval must be a multiple of trap_block"
+    blocks_per_gen = eval_interval // trap_block
+    occ_good, occ_bad, status_hist, p_hist = [], [], [], []
     
     while total_ticks < max_ticks:
         with torch.inference_mode():
@@ -111,6 +147,32 @@ def run_ssga(cfg: DictConfig):
             eve_val = torch.sigmoid(genes[..., 3:4]) * (cfg.eve_max - cfg.eve_min) + cfg.eve_min
             phenotypes = torch.cat([probs, eve_val], dim=-1) # [Islands, Agents, 4]
 
+            # Trap tracking: occupancy of the median group member per block
+            info = rollouts["next", "agents", "info"]
+            gd = info["good_target_dist"].median(dim=2).values.view(n_islands, blocks_per_gen, trap_block)
+            bd = info["bad_target_dist"].median(dim=2).values.view(n_islands, blocks_per_gen, trap_block)
+            blk_good = (gd < cfg.on_target_radius).float().mean(-1).T.cpu().numpy() # [Blocks, Islands]
+            blk_bad = (bd < cfg.on_target_radius).float().mean(-1).T.cpu().numpy()
+            occ_good.append(blk_good)
+            occ_bad.append(blk_bad)
+            status_hist.extend(block_status(blk_good, blk_bad))
+            p_hist.append(probs.mean(1).cpu().numpy()) # [Islands, 3]: group-mean channel use
+
+            # Aggregates per block, logged at the block's last tick
+            trap_logs = []
+            for b in range(blocks_per_gen):
+                n_blocks = len(status_hist) - blocks_per_gen + b + 1
+                counts = np.bincount(status_hist[n_blocks - 1], minlength=3)
+                window_cls = classify_window(np.stack(status_hist[max(0, n_blocks - cfg.trap_window):n_blocks]))
+                window_counts = np.bincount(window_cls, minlength=3)
+                log = {"trap/block": n_blocks - 1}
+                for i, c in enumerate(TRAP_CLASSES):
+                    log[f"trap/n_{c}"] = int(counts[i])
+                    log[f"trap/frac_{c}"] = counts[i] / n_islands
+                    log[f"trap/window_frac_{c}"] = window_counts[i] / n_islands
+                log["trap/window_trapped_fraction"] = 1 - window_counts[0] / n_islands
+                trap_logs.append(log)
+
             # Logging Per-Tick Avg Fitness and Genes
             if cfg.use_wandb:
                 step_avg_fit = rewards.mean(dim=(0, 2, 3)).cpu().tolist()
@@ -118,13 +180,16 @@ def run_ssga(cfg: DictConfig):
                 avg_eve = eve_val.mean().item()
                 
                 for step_idx in range(eval_interval):
-                    wandb.log({
+                    log = {
                         "tick/avg_fitness": step_avg_fit[step_idx],
                         "tick/avg_prob_priv": avg_probs[0],
                         "tick/avg_prob_soc": avg_probs[1],
                         "tick/avg_prob_none": avg_probs[2],
                         "tick/avg_eve": avg_eve
-                    }, step=total_ticks + step_idx)
+                    }
+                    if (step_idx + 1) % trap_block == 0:
+                        log.update(trap_logs[step_idx // trap_block])
+                    wandb.log(log, step=total_ticks + step_idx)
                 
                 if "good_target_dist" in rollouts["next", "agents", "info"]:
                     good_dist = rollouts["next", "agents", "info", "good_target_dist"] # [Islands, Steps, Agents]
@@ -212,6 +277,8 @@ def run_ssga(cfg: DictConfig):
             
             # Mutate
             mutation_mask = (torch.rand_like(top_genes) < cfg.ssga.mutation_prob)
+            if fixed_eve is not None:
+                mutation_mask[..., 3] = False
             mutation_noise = torch.randn_like(top_genes) * cfg.ssga.mutation_sigma
             cloned_genes = top_genes + (mutation_noise * mutation_mask)
             
@@ -253,6 +320,39 @@ def run_ssga(cfg: DictConfig):
                 torch.cuda.empty_cache()
 
     print("Simulation Complete.")
+
+    # Trap outcome: classify each group over the last trap_window blocks
+    status = np.stack(status_hist) # [Blocks, Islands]
+    final_class = classify_window(status[-cfg.trap_window:])
+    final_counts = np.bincount(final_class, minlength=3)
+    summary = {f"n_final_{c}": int(final_counts[i]) for i, c in enumerate(TRAP_CLASSES)}
+    summary["trapped_fraction"] = float(1 - final_counts[0] / n_islands)
+    summary["trapped_bad_fraction"] = float(final_counts[1] / n_islands)
+    summary["trapped_lost_fraction"] = float(final_counts[2] / n_islands)
+
+    fname = f"occupancy_{cfg.run_name}.npz"
+    np.savez_compressed(
+        fname,
+        occ_good=np.concatenate(occ_good),  # [Blocks, Islands]
+        occ_bad=np.concatenate(occ_bad),  # [Blocks, Islands]
+        status=status,  # [Blocks, Islands], index into TRAP_CLASSES
+        final_class=final_class,  # [Islands], index into TRAP_CLASSES
+        block_end_tick=(np.arange(len(status)) + 1) * trap_block,
+        probs=np.stack(p_hist),  # [Gen, Islands, 3]
+        gen_end_tick=(np.arange(len(p_hist)) + 1) * eval_interval,
+        trap_block=trap_block,
+        eval_interval=eval_interval,
+        trap_window=cfg.trap_window,
+        on_target_radius=cfg.on_target_radius,
+    )
+    print(summary)
+    if cfg.use_wandb:
+        for k, v in summary.items():
+            wandb.run.summary[k] = v
+        art = wandb.Artifact(name=f"occupancy_{wandb.run.id}", type="dataset")
+        art.add_file(fname)
+        wandb.log_artifact(art)
+
     env.close()
     logger.finish()
 
