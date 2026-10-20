@@ -26,6 +26,9 @@ dependencies = [
     "pandas>=2.3.3",
     "pyarrow",
     "fastparquet",
+    "duckdb[cu124]>=1.4.5",
+    "statsmodels>=0.14.6",
+    "lifelines>=0.30.0",
 ]
 
 [project.optional-dependencies]

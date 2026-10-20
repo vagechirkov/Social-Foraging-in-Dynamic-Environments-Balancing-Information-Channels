@@ -538,3 +538,6 @@ best_env_params.yaml
 docs/
 analyze_data.ipynb
 reproduce_image.ipynb
+analysis_cache
+videos
+figures
