@@ -68,8 +68,19 @@ df_gs_all = df_group_steps.copy()
 
 print("Calculating raw median performance per group from df...")
 group_perf = df.groupby(['run_id', 'group_id', 'step', 'close_target_index'])['current_fitness'].median().reset_index()
+# Percentage of the best (commented out as requested):
+# group_perf_max = df.assign(above_06=(df['current_fitness'] > 0.6).astype(float) * 100).groupby(['run_id', 'group_id', 'step', 'close_target_index'])['above_06'].mean().reset_index()
+# group_perf_max = group_perf_max.rename(columns={'above_06': 'current_fitness'})
+# Variation in performance (Standard Deviation) (commented out):
+# group_perf_max = df.groupby(['run_id', 'group_id', 'step', 'close_target_index'])['current_fitness'].std().reset_index()
+# Median performance for visualization:
+group_perf_max = group_perf.copy()
+
 group_perf = group_perf[group_perf['step'] < 199000]
 group_perf['unique_group'] = group_perf['run_id'].astype(str) + '_' + group_perf['group_id'].astype(str)
+
+group_perf_max = group_perf_max[group_perf_max['step'] < 199000]
+group_perf_max['unique_group'] = group_perf_max['run_id'].astype(str) + '_' + group_perf_max['group_id'].astype(str)
 
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import Polygon, Rectangle
@@ -150,8 +161,11 @@ cluster_groups_by_cond = {}
 
 for i, cond in enumerate(conditions):
     cond_data = group_perf[group_perf['close_target_index'] == cond].copy()
-    
     heatmap_data = cond_data.pivot(index='unique_group', columns='step', values='current_fitness')
+    
+    cond_data_max = group_perf_max[group_perf_max['close_target_index'] == cond].copy()
+    heatmap_data_max = cond_data_max.pivot(index='unique_group', columns='step', values='current_fitness')
+    heatmap_data_max = heatmap_data_max.reindex(heatmap_data.index)
     
     # === PREVIOUS CLUSTERING CODE (based on median reward) ===
     # X_cluster = heatmap_data.fillna(0).values
@@ -206,12 +220,37 @@ for i, cond in enumerate(conditions):
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10).fit(X_cluster)
         cluster_labels = kmeans.labels_
     else:
-        # Fallback if no distance data
-        X_cluster = heatmap_data.fillna(0).values[:, :100_000]
+        # === PREVIOUS CLUSTERING CODE (based on performance/heatmap) ===
+        # X_cluster = heatmap_data.fillna(0).values[:, :100_000]
+        # kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10).fit(X_cluster)
+        # cluster_labels = kmeans.labels_
+        # ===============================================================
+
+        # Cluster by composition (mean vector of prob_priv, prob_soc, and process noise over time)
+        cond_df_flow = df_flow[df_flow['close_target_index'] == cond].copy()
+        cond_df_flow['unique_group'] = cond_df_flow['run_id'].astype(str) + '_' + cond_df_flow['group_id'].astype(str)
+        cond_df_flow['gene_eve_scaled'] = (1 / (1 + np.exp(-cond_df_flow['gene_eve']))) * (0.1 - 0.01) + 0.01
+        comp_mean = cond_df_flow.groupby(['unique_group', 'step'])[['prob_priv', 'prob_soc', 'gene_eve_scaled']].mean().reset_index()
+        
+        comp_pivot_priv = comp_mean.pivot(index='unique_group', columns='step', values='prob_priv').reindex(heatmap_data.index).fillna(0)
+        comp_pivot_soc = comp_mean.pivot(index='unique_group', columns='step', values='prob_soc').reindex(heatmap_data.index).fillna(0)
+        comp_pivot_eve = comp_mean.pivot(index='unique_group', columns='step', values='gene_eve_scaled').reindex(heatmap_data.index).fillna(0)
+        
+        # Cluster using data before the target flip (step <= 100,000)
+        X_cluster = np.hstack([
+            comp_pivot_priv.loc[:, :100000].values, 
+            comp_pivot_soc.loc[:, :100000].values, 
+            comp_pivot_eve.loc[:, :100000].values
+        ])
+        
+        from sklearn.preprocessing import StandardScaler
+        X_cluster = StandardScaler().fit_transform(X_cluster)
+        
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10).fit(X_cluster)
         cluster_labels = kmeans.labels_
 
-    group_mean_perf = heatmap_data.mean(axis=1).values
+    # Calculate mean performance only before the target flip (step <= 100,000)
+    group_mean_perf = heatmap_data.loc[:, :100000].mean(axis=1).values
     cluster_avg_perf = {c: group_mean_perf[cluster_labels == c].mean() for c in range(n_clusters)}
     sorted_clusters = sorted(cluster_avg_perf.keys(), key=lambda c: cluster_avg_perf[c])
 
@@ -236,6 +275,7 @@ for i, cond in enumerate(conditions):
     cluster_groups_by_cond[cond] = cluster_groups
 
     heatmap_data = heatmap_data.iloc[sorted_indices]
+    heatmap_data_max = heatmap_data_max.iloc[sorted_indices]
     heatmap_cols = heatmap_data.columns
     
     fig = plt.figure(figsize=(38, 20))
@@ -244,6 +284,7 @@ for i, cond in enumerate(conditions):
     ax_main = fig.add_subplot(gs[0, :])
 
     extent = [heatmap_cols.min()/1000, heatmap_cols.max()/1000, 0, heatmap_data.shape[0]]
+    # extent = [heatmap_cols.min(), heatmap_cols.max(), 0, heatmap_data.shape[0]]
     
     custom_perf_cmap = mcolors.LinearSegmentedColormap.from_list('custom_perf', [
         '#8e0152', '#c51b7d', '#de77ae', '#f1b6da', '#fde0ef', '#f7f7f7',
@@ -251,7 +292,7 @@ for i, cond in enumerate(conditions):
     ])
     
     cax = ax_main.imshow(
-        heatmap_data, 
+        heatmap_data_max, 
         aspect='auto', 
         cmap=custom_perf_cmap, 
         interpolation='none', 
@@ -263,10 +304,13 @@ for i, cond in enumerate(conditions):
     ax_main.set_xlabel("Generation (1k steps)", fontsize=32, labelpad=0)
     # custom_ticks now stops before 200
     custom_ticks = [1] + list(np.arange(25, 200, 25))
+    # ax_main.set_xlabel("Steps", fontsize=32, labelpad=0)
+    # custom_ticks = [1000] + list(np.arange(25000, 200000, 25000))
     ax_main.set_xticks(custom_ticks)
     ax_main.set_xticklabels([str(x) for x in custom_ticks])
     ax_main.tick_params(labelsize=24)
     ax_main.axvline(x=100, color='white', linestyle=':', linewidth=3)
+    # ax_main.axvline(x=100000, color='white', linestyle=':', linewidth=3)
 
     title_str = "Good Target Initialisation" if cond == 0 else "Bad Target Initialisation"
     ax_main.set_yticks([])
@@ -286,6 +330,8 @@ for i, cond in enumerate(conditions):
     cbar = fig.colorbar(cax, cax=cbar_ax, orientation='vertical')
     cbar.ax.tick_params(labelsize=28, length=5)
     cbar.set_label('Median Performance', fontsize=32, labelpad=5) #  , weight='bold'
+    #cbar.set_label('% Agents > 0.6', fontsize=32, labelpad=5) #  , weight='bold'
+    #cbar.set_label('Performance Std Dev', fontsize=32, labelpad=5) #  , weight='bold'
 
     info_genes = ['prob_priv', 'prob_soc', 'prob_none']
     info_labels = ['Private', 'Social', 'None']
@@ -368,7 +414,8 @@ for i, cond in enumerate(conditions):
         # draw_streamplot(ax_flow, flow_df, 'Blues', 'Flow Gen 1-7')
 
     os.makedirs('figures', exist_ok=True)
-    filename = f'figures/clustered_trajectories_gene_ts_perf_{"good" if cond == 0 else "bad"}_{plot_version}.png'
+    # filename = f'figures/clustered_trajectories_gene_ts_perf_perc_best_{"good" if cond == 0 else "bad"}_{plot_version}.png'
+    filename = f'figures/clustered_trajectories_comp_clust_perf_med_{"good" if cond == 0 else "bad"}_{plot_version}.png'
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     plt.savefig(filename.replace('.png', '.pdf'), dpi=300, bbox_inches='tight')
     # # plt.show()
