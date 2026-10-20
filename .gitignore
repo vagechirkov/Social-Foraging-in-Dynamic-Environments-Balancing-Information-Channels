@@ -538,6 +538,8 @@ best_env_params.yaml
 docs/
 analyze_data.ipynb
 reproduce_image.ipynb
+revision_analyses.ipynb
+coupled_dynamics.ipynb
 analysis_cache
 videos
 figures
