@@ -121,6 +121,7 @@ class Scenario(BaseScenario):
             "spot_radius": kwargs.pop("spot_radius", 0.5),
             "decision_making": kwargs.pop("decision_making", "sum"),
             "social_fusion": kwargs.pop("social_fusion", "naive"),
+            "flat_factor_kappa": kwargs.pop("flat_factor_kappa", 2.0),
             "x_dim": self.x_dim,
             "y_dim": self.y_dim,
         }

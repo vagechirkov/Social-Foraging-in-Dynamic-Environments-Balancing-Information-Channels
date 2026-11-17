@@ -50,7 +50,7 @@ spot_radius: 0.25
 p_spatial_explore: 0.0
 belief_selectivity_threshold: 0.25
 decision_making: "greedy"
-social_fusion: "naive"   # "naive", "ci", "ci_optimal_weight" or "firsthand"
+social_fusion: "naive"   # "naive", "ci", "ci_optimal_weight", "flat_factor_merging_2", "flat_factor_merging_8" or "firsthand"
 bias_magnitude: 0.0
 min_dist_between_entities: 0.001
 

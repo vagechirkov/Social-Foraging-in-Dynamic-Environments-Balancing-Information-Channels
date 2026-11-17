@@ -60,7 +60,8 @@ class ForagingAgent(Agent):
             belief_selectivity_threshold: float = 3.0, # Mahalanobis distance threshold, std squared
             consensus_selectivity_threshold: float = 100.0,
             social_info_aggregation: str = "average",  # "average" or "most_useful"
-            social_fusion: str = "naive",  # "naive", "ci", "ci_optimal_weight" or "firsthand"
+            social_fusion: str = "naive",  # "naive", "ci", "ci_optimal_weight", "flat_factor_merging[_<kappa>]" or "firsthand"
+            flat_factor_kappa: float = 2.0,
             # --- Physics ---
             momentum: float = 0.9,  # alpha: Gradient smoothing
             max_belief_uncertainty: float = 20.0,
@@ -99,6 +100,10 @@ class ForagingAgent(Agent):
         self.consensus_selectivity_threshold = consensus_selectivity_threshold
         self.social_info_aggregation = social_info_aggregation
         self.social_fusion = social_fusion
+        if isinstance(social_fusion, str) and social_fusion.startswith("flat_factor_merging_"):
+            self.flat_factor_kappa = float(social_fusion.split("flat_factor_merging_")[1])
+        else:
+            self.flat_factor_kappa = float(flat_factor_kappa)
         self.max_belief_uncertainty = max_belief_uncertainty
         self.decision_making = decision_making
         self.n_private_samples = n_private_samples
@@ -1096,6 +1101,12 @@ def update_belief(agent: ForagingAgent):
         f_b = torch.where(is_soc, 1.0 / torch.clamp(one_minus_omega, min=1e-8), torch.ones_like(omega))
         sigma_t = sigma_t * f_a.view(-1, 1, 1)
         R_k = R_k * f_b.view(-1, 1, 1)
+    elif agent.social_fusion == "flat_factor_merging" or (
+        isinstance(agent.social_fusion, str) and agent.social_fusion.startswith("flat_factor_merging_")
+    ):
+        is_soc = (agent.action.u[:, 0].long() == 1).unsqueeze(1).expand_as(update_mask)[update_mask]
+        f = 1.0 + (agent.flat_factor_kappa - 1.0) * is_soc.float()  # kappa for social updates, 1 for private
+        R_k = R_k * f.view(-1, 1, 1)
     # mu_t: (batch, n_targets, 2)
     mu_t = agent.belief_target_pos[update_mask]
     # z_k: (batch, n_targets, 2)
@@ -1139,6 +1150,10 @@ def update_belief(agent: ForagingAgent):
         f_q_b = torch.where(is_soc, 1.0 / torch.clamp(one_minus_omega_q, min=1e-8), torch.ones_like(omega_q))
         sigma_q_t = sigma_q_t * f_q_a
         R_q_k = R_q_k * f_q_b
+    elif agent.social_fusion == "flat_factor_merging" or (
+        isinstance(agent.social_fusion, str) and agent.social_fusion.startswith("flat_factor_merging_")
+    ):
+        R_q_k = R_q_k * f
     # q_t (batch, n_targets)
     q_t = agent.belief_target_qual[update_mask]
     # o_{q,k} (batch, n_targets)

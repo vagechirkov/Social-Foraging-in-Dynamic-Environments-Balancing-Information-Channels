@@ -17,7 +17,7 @@ def submit_ssga_jobs():
     env_dims = [4]
     close_target_indices = [0, 1]
     respawn_modes = ["group_center"]  # "random", 
-    social_fusions = ["ci_optimal_weight"]  # "naive", "ci", "firsthand"
+    social_fusions = ["ci_optimal_weight", "flat_factor_merging_2", "flat_factor_merging_8"]  # "naive", "ci", "firsthand"
     eval_intervals = [250, 1000, 4000]  # generation length T
     n_generations = 200  # same number of selection steps under every T
     trap_block = min(eval_intervals)  # trap status per block of this many ticks, comparable across T
