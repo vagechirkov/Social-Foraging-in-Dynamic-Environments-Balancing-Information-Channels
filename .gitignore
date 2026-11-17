@@ -543,3 +543,4 @@ coupled_dynamics.ipynb
 analysis_cache
 videos
 figures
+*.npz
