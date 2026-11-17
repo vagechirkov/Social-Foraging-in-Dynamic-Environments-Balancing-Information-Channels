@@ -60,7 +60,7 @@ class ForagingAgent(Agent):
             belief_selectivity_threshold: float = 3.0, # Mahalanobis distance threshold, std squared
             consensus_selectivity_threshold: float = 100.0,
             social_info_aggregation: str = "average",  # "average" or "most_useful"
-            social_fusion: str = "naive",  # "naive", "ci" (covariance intersection) or "firsthand"
+            social_fusion: str = "naive",  # "naive", "ci", "ci_optimal_weight" or "firsthand"
             # --- Physics ---
             momentum: float = 0.9,  # alpha: Gradient smoothing
             max_belief_uncertainty: float = 20.0,
@@ -1085,6 +1085,17 @@ def update_belief(agent: ForagingAgent):
         f = 1.0 + is_soc.float()  # 2 for social updates, 1 for private
         sigma_t = sigma_t * f.view(-1, 1, 1)
         R_k = R_k * f.view(-1, 1, 1)
+    elif agent.social_fusion == "ci_optimal_weight":
+        is_soc = (agent.action.u[:, 0].long() == 1).unsqueeze(1).expand_as(update_mask)[update_mask]
+        sigma_a_sq = sigma_t[:, 0, 0]
+        sigma_b_sq = R_k[:, 0, 0]
+        denom = torch.clamp(sigma_a_sq + sigma_b_sq, min=1e-8)
+        omega = sigma_b_sq / denom
+        one_minus_omega = sigma_a_sq / denom
+        f_a = torch.where(is_soc, 1.0 / torch.clamp(omega, min=1e-8), torch.ones_like(omega))
+        f_b = torch.where(is_soc, 1.0 / torch.clamp(one_minus_omega, min=1e-8), torch.ones_like(omega))
+        sigma_t = sigma_t * f_a.view(-1, 1, 1)
+        R_k = R_k * f_b.view(-1, 1, 1)
     # mu_t: (batch, n_targets, 2)
     mu_t = agent.belief_target_pos[update_mask]
     # z_k: (batch, n_targets, 2)
@@ -1120,6 +1131,14 @@ def update_belief(agent: ForagingAgent):
     if agent.social_fusion == "ci":
         sigma_q_t = sigma_q_t * f
         R_q_k = R_q_k * f
+    elif agent.social_fusion == "ci_optimal_weight":
+        denom_q = torch.clamp(sigma_q_t + R_q_k, min=1e-8)
+        omega_q = R_q_k / denom_q
+        one_minus_omega_q = sigma_q_t / denom_q
+        f_q_a = torch.where(is_soc, 1.0 / torch.clamp(omega_q, min=1e-8), torch.ones_like(omega_q))
+        f_q_b = torch.where(is_soc, 1.0 / torch.clamp(one_minus_omega_q, min=1e-8), torch.ones_like(omega_q))
+        sigma_q_t = sigma_q_t * f_q_a
+        R_q_k = R_q_k * f_q_b
     # q_t (batch, n_targets)
     q_t = agent.belief_target_qual[update_mask]
     # o_{q,k} (batch, n_targets)
