@@ -29,15 +29,24 @@ warnings.filterwarnings('ignore')
 load_dotenv()
 
 parser = argparse.ArgumentParser(description="Paper figures 2 and 3.")
-parser.add_argument("--fusions", nargs="+", default=["naive", "ci", "firsthand"])
+parser.add_argument(
+    "--fusions",
+    nargs="+",
+    default=["naive", "ci", "firsthand", "flat_factor_merging_2", "flat_factor_merging_8"],
+)
 parser.add_argument("--generations", nargs="+", type=int, default=[200, 1000])
 parser.add_argument("--figures", nargs="+", default=["fig2", "fig3"])
 args = parser.parse_args()
 
 wandb_dir = os.environ.get("WANDB_DIR", "./")
 DATASETS = {200: "trap_split_T1000_200gen", 1000: "trap_split_T1000_long"}
-OUT = os.path.join('figures', 'paper_figures')
-os.makedirs(OUT, exist_ok=True)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUT_DIRS = list(dict.fromkeys([
+    os.path.join('figures', 'paper_figures'),
+    os.path.join(SCRIPT_DIR, 'figures', 'paper_figures'),
+]))
+for _d in OUT_DIRS:
+    os.makedirs(_d, exist_ok=True)
 
 # Trap rule: a group is trapped if its median reward, averaged over the last TRAP_WINDOW generations,
 # is below TRAP_REWARD (valley between the two modes of the final reward).
@@ -63,9 +72,16 @@ FLOW_DENSITY_SCALE = 0.3   # streamline density = scale / sqrt(share of the tria
 FLOW_MIN_SHARE = 0.02     # fig. 3: draw the flow only where at least this share of the set's groups pass
 MIN_CLUSTER_GROUPS = 3
 
-# File names sort as 200 then 1000 generations, and naive -> ci -> first-hand
+# File names sort as 200 then 1000 generations, and naive -> ci -> first-hand -> flat-factor -> ci_optimal_weight
 GEN_ORDER = {200: 1, 1000: 2}
-FUSION_ORDER = {"naive": 1, "ci": 2, "firsthand": 3}
+FUSION_ORDER = {
+    "naive": 1,
+    "ci": 2,
+    "firsthand": 3,
+    "flat_factor_merging_2": 4,
+    "flat_factor_merging_8": 5,
+    "ci_optimal_weight": 6,
+}
 
 STARTS = [(0, "Good start"), (1, "Bad start")]
 CHANNELS = [('prob_priv', "Private"), ('prob_soc', "Social"), ('prob_none', "None")]
@@ -229,10 +245,11 @@ def ordered_name(figure, fusion, n_gen):
 
 
 def save(fig, name):
-    path = os.path.join(OUT, name) + '.pdf'
-    fig.savefig(path, bbox_inches='tight', dpi=300)
+    for out_dir in OUT_DIRS:
+        path = os.path.join(out_dir, name) + '.pdf'
+        fig.savefig(path, bbox_inches='tight', dpi=300)
+        print(f"Saved {path}")
     plt.close(fig)
-    print(f"Saved {path}")
 
 
 # ---------------------------------------------------------------------------------------------

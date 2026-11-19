@@ -22,13 +22,18 @@ TRAP_CLASSES = ["good", "bad", "lost"]  # status codes 0, 1, 2 in ssga_2_targets
 N_WORKERS = 8
 
 
-def get_runs(api, max_ticks, eval_interval):
+def get_runs(api, max_ticks, eval_interval, fusions=None):
     filters = {
         "config.max_ticks": max_ticks,
         "config.ssga.eval_interval": eval_interval,
         "config.env_switch": False,
     }
-    return list(api.runs(PROJECT, filters=filters))
+    if fusions is not None:
+        filters["config.social_fusion"] = {"$in": list(fusions)}
+    runs = list(api.runs(PROJECT, filters=filters))
+    if fusions is not None:
+        runs = [r for r in runs if r.config.get("social_fusion", "naive") in fusions]
+    return runs
 
 
 def aggregate_agent_stats(artifact, tmp_root):
@@ -60,19 +65,26 @@ def aggregate_agent_stats(artifact, tmp_root):
 def download_occupancy(run, tmp_root):
     """Per group: final trap class. Per group x generation: fraction of the generation's
     trap blocks in which the group was on the good target, and on the bad target."""
-    artifacts = [a for a in run.logged_artifacts() if a.name.startswith(f"occupancy_{run.id}")]
-    if not artifacts:
-        return None
-    artifact = sorted(artifacts, key=lambda x: int(x.version[1:]))[-1]
-    download_dir = tempfile.mkdtemp(dir=tmp_root)
-    try:
-        path = artifact.download(root=download_dir, skip_cache=True)
-        npz_path = glob.glob(os.path.join(path, "*.npz"))[0]
-        d = np.load(npz_path)
+    wandb_dir = os.environ.get("WANDB_DIR", ".")
+    local_npz = sorted(glob.glob(os.path.join(wandb_dir, "artifacts", f"occupancy_{run.id}*", "*.npz")))
+    if local_npz:
+        d = np.load(local_npz[-1])
         final_class, status = d["final_class"], d["status"]
         blocks_per_gen = int(d["eval_interval"]) // int(d["trap_block"])
-    finally:
-        shutil.rmtree(download_dir, ignore_errors=True)
+    else:
+        artifacts = [a for a in run.logged_artifacts() if a.name.startswith(f"occupancy_{run.id}")]
+        if not artifacts:
+            return None
+        artifact = sorted(artifacts, key=lambda x: int(x.version[1:]))[-1]
+        download_dir = tempfile.mkdtemp(dir=tmp_root)
+        try:
+            path = artifact.download(root=download_dir, skip_cache=True)
+            npz_path = glob.glob(os.path.join(path, "*.npz"))[0]
+            d = np.load(npz_path)
+            final_class, status = d["final_class"], d["status"]
+            blocks_per_gen = int(d["eval_interval"]) // int(d["trap_block"])
+        finally:
+            shutil.rmtree(download_dir, ignore_errors=True)
 
     n_blocks, n_groups = status.shape
     per_gen_shape = (n_blocks // blocks_per_gen, blocks_per_gen, n_groups)
@@ -140,6 +152,8 @@ def main():
     parser.add_argument("--out-subfolder", default=None,
                         help="Defaults to trap_split_T<eval_interval>_long for the long runs, "
                              "trap_split_T<eval_interval>_<n_gen>gen otherwise.")
+    parser.add_argument("--fusions", nargs="+", default=None,
+                        help="Optional list of social_fusion values to include.")
     args = parser.parse_args()
 
     n_gen = args.max_ticks // args.eval_interval
@@ -148,7 +162,7 @@ def main():
         else f"trap_split_T{args.eval_interval}_{n_gen}gen")
 
     api = wandb.Api()
-    runs = get_runs(api, args.max_ticks, args.eval_interval)
+    runs = get_runs(api, args.max_ticks, args.eval_interval, args.fusions)
     print(f"Found {len(runs)} runs matching the filters.")
 
     wandb_dir = os.environ.get("WANDB_DIR", ".")
