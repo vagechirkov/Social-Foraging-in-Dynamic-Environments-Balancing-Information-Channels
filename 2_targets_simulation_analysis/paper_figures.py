@@ -32,7 +32,7 @@ parser = argparse.ArgumentParser(description="Paper figures 2 and 3.")
 parser.add_argument(
     "--fusions",
     nargs="+",
-    default=["naive", "ci", "firsthand", "flat_factor_merging_2", "flat_factor_merging_8"],
+    default=["naive", "ci", "firsthand", "flat_factor_merging_2", "flat_factor_merging_8", "ci_optimal_weight"],
 )
 parser.add_argument("--generations", nargs="+", type=int, default=[200, 1000])
 parser.add_argument("--figures", nargs="+", default=["fig2", "fig3"])
