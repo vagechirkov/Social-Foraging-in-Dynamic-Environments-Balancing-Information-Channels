@@ -186,6 +186,10 @@ for d in out_dirs:
     fig.savefig(out_file, dpi=300, bbox_inches="tight")
     fig.savefig(out_file.replace(".png", ".pdf"), bbox_inches="tight")
     print(f"Saved {out_file}")
+ms_path = os.path.join(os.path.dirname(script_dir), "figures", "manuscript", "supplement", "s4_trapped_fraction.pdf")
+os.makedirs(os.path.dirname(ms_path), exist_ok=True)
+fig.savefig(ms_path, bbox_inches="tight")
+print(f"Saved {ms_path}")
 plt.close(fig)
 
 # 2. Individual 1x2 figure per generation

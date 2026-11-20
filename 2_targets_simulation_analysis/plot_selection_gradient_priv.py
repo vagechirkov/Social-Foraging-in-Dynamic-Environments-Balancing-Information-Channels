@@ -144,6 +144,7 @@ axes[0].set_ylabel(r"Selection gradient on $\omega_{\mathrm{priv}}$" + "\n" + r"
 fig.tight_layout()
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
+repo_root = os.path.dirname(script_dir)
 out_dirs = list(dict.fromkeys([os.path.join(script_dir, "figures"), "figures"]))
 for d in out_dirs:
     os.makedirs(d, exist_ok=True)
@@ -151,4 +152,8 @@ for d in out_dirs:
     fig.savefig(out_file, dpi=300, bbox_inches="tight")
     fig.savefig(out_file.replace(".png", ".pdf"), bbox_inches="tight")
     print(f"Saved {out_file}")
+ms_path = os.path.join(repo_root, "figures", "manuscript", "supplement", "s5_selection_gradient_priv.pdf")
+os.makedirs(os.path.dirname(ms_path), exist_ok=True)
+fig.savefig(ms_path, bbox_inches="tight")
+print(f"Saved {ms_path}")
 plt.close(fig)
