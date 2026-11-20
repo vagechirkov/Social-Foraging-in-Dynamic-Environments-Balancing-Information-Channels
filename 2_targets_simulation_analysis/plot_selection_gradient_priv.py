@@ -17,22 +17,29 @@ df["social_fusion"] = df["social_fusion"].astype(str)
 df["unique_group"] = df["run_id"] + "_" + df["group_id"].astype(str)
 df = df.sort_values(["unique_group", "generation"])
 
+FUSIONS = [
+    "naive",
+    "flat_factor_merging_2",
+    "flat_factor_merging_8",
+    "ci_optimal_weight",
+    "firsthand",
+]
 FUSION_LABELS = {
     "naive": "Naive",
     "flat_factor_merging_2": "Flat factor\n($\\kappa=2$)",
     "flat_factor_merging_8": "Flat factor\n($\\kappa=8$)",
-    "ci": "CI\n(equal)",
-    "ci_optimal_weight": "CI\n(optimal)",
+    "ci_optimal_weight": "Covariance\nintersection",
     "firsthand": "First-hand\nonly",
 }
 FUSION_COLORS = {
     "naive": "#2a78d6",
     "flat_factor_merging_2": "#7b61c2",
     "flat_factor_merging_8": "#c2549c",
-    "ci": "#eb6834",
-    "ci_optimal_weight": "#e6a520",
+    "ci_optimal_weight": "#eb6834",
     "firsthand": "#1baf7a",
 }
+
+df = df[df["social_fusion"].isin(FUSIONS)].copy()
 
 # Per-generation change in group-mean private sensing probability:
 # d_prob_priv = w_priv(g) - w_priv(g - 1) (probability change per generation)
@@ -86,8 +93,8 @@ for title, sub_df in regimes:
     bound = (s["grad_priv_mean"].abs() + s["grad_priv_ci"]).max()
     max_abs = max(max_abs, float(bound))
 
-# Use the "On good target" gradient ordering for both panels
-ordered_fusions = summaries[0][1]["social_fusion"].tolist()
+# Use the canonical social fusion order across all figures
+ordered_fusions = FUSIONS
 ylim_abs = max(max_abs * 1.12, 0.52)
 
 fig, axes = plt.subplots(1, len(summaries), figsize=(9.8, 5.4), sharey=True)

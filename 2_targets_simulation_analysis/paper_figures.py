@@ -23,14 +23,14 @@ warnings.filterwarnings('ignore')
 load_dotenv()
 
 MAIN_FUSION = "naive"
-SUPP_FUSIONS = ["ci_optimal_weight", "firsthand", "flat_factor_merging_2", "flat_factor_merging_8"]
+SUPP_FUSIONS = ["flat_factor_merging_2", "flat_factor_merging_8", "ci_optimal_weight", "firsthand"]
 
 FUSION_TITLES = {
     "naive": "Naive merging",
-    "ci_optimal_weight": "Covariance intersection (optimal weight)",
-    "firsthand": "First-hand only",
     "flat_factor_merging_2": r"Flat-factor merging ($\kappa = 2$)",
     "flat_factor_merging_8": r"Flat-factor merging ($\kappa = 8$)",
+    "ci_optimal_weight": "Covariance intersection",
+    "firsthand": "First-hand only",
 }
 
 parser = argparse.ArgumentParser(description="Paper figures 2 and 3 (1000 generations).")
@@ -79,10 +79,10 @@ MIN_CLUSTER_GROUPS = 3
 GEN_ORDER = {200: 1, 1000: 2}
 FUSION_ORDER = {
     "naive": 1,
-    "ci_optimal_weight": 2,
-    "firsthand": 3,
-    "flat_factor_merging_2": 4,
-    "flat_factor_merging_8": 5,
+    "flat_factor_merging_2": 2,
+    "flat_factor_merging_8": 3,
+    "ci_optimal_weight": 4,
+    "firsthand": 5,
 }
 
 STARTS = [(0, "Good start"), (1, "Bad start")]

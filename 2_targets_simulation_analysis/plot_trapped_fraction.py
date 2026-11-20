@@ -34,7 +34,6 @@ FUSIONS = [
     "naive",
     "flat_factor_merging_2",
     "flat_factor_merging_8",
-    "ci",
     "ci_optimal_weight",
     "firsthand",
 ]
@@ -42,16 +41,14 @@ FUSION_LABELS = {
     "naive": "Naive",
     "flat_factor_merging_2": r"Flat factor ($\kappa=2$)",
     "flat_factor_merging_8": r"Flat factor ($\kappa=8$)",
-    "ci": "CI (equal)",
-    "ci_optimal_weight": "CI (optimal)",
+    "ci_optimal_weight": "Covariance intersection",
     "firsthand": "First-hand only",
 }
 FUSION_COLORS = {
     "naive": "#2a78d6",
     "flat_factor_merging_2": "#7b61c2",
     "flat_factor_merging_8": "#c2549c",
-    "ci": "#eb6834",
-    "ci_optimal_weight": "#e6a520",
+    "ci_optimal_weight": "#eb6834",
     "firsthand": "#1baf7a",
 }
 CONDITION_TITLES = {0: "Start near good target", 1: "Start near bad target"}
