@@ -53,14 +53,8 @@ OUT_DIRS = list(dict.fromkeys([
 for _d in OUT_DIRS:
     os.makedirs(_d, exist_ok=True)
 
-# Trap rule: a group is trapped if its median reward, averaged over the last TRAP_WINDOW generations,
-# is below TRAP_REWARD (valley between the two modes of the final reward).
+# Reward column used for heatmap colour and ranking the worst/best groups
 PERF_COL = 'median_avg_fitness'
-TRAP_REWARD = 0.7
-TRAP_WINDOW = 20
-# Trap onset: first generation of the final unbroken stretch in which the centred ONSET_SMOOTH-generation
-# average of the median reward is below TRAP_REWARD (0 = never left the bad target)
-ONSET_SMOOTH = 10
 
 # Clusters, ranked by mean median reward over the run: the worst N_CLUSTER trapped groups (all trapped groups if fewer)
 # and the best N_CLUSTER groups overall (fig. 2 only)
@@ -108,12 +102,13 @@ def load(n_gen):
     df = pd.read_parquet(path)
     df['run_id'] = df['run_id'].astype(str)
     df['social_fusion'] = df['social_fusion'].astype(str)
+    df['trap_class'] = df['trap_class'].astype(str)
     df['unique_group'] = df['run_id'] + '_' + df['group_id'].astype(str)
     df['mx'] = df['prob_none'] + 0.5 * df['prob_soc']
     df['my'] = H * df['prob_soc']
-    trapped = pd.concat([d.pivot(index='unique_group', columns='generation', values=PERF_COL)
-                         .iloc[:, -TRAP_WINDOW:].mean(axis=1) < TRAP_REWARD for _, d in df.groupby('run_id')])
-    df['outcome'] = np.where(trapped.reindex(df['unique_group']).values, "Trapped", "Not trapped")
+    last_gen = df['generation'].max()
+    last_class = df[df['generation'] == last_gen].set_index('unique_group')['trap_class']
+    df['outcome'] = np.where(last_class.reindex(df['unique_group']).values != "good", "Trapped", "Not trapped")
     return df
 
 
@@ -125,10 +120,10 @@ def with_steps(d):
 
 
 def trap_onset(d):
-    """Per trapped group: first generation of its final trapped stretch (0 if it was never free)."""
-    perf = d[d['outcome'] == "Trapped"].pivot(index='unique_group', columns='generation', values=PERF_COL)
-    free = ~(perf.T.rolling(ONSET_SMOOTH, center=True, min_periods=1).mean().T < TRAP_REWARD)
-    return free.apply(lambda r: r[r].index.max() + 1 if r.any() else 0, axis=1)
+    """Per trapped group: first generation of its final unbroken trapped stretch (0 if never holding)."""
+    tc = d[d['outcome'] == "Trapped"].pivot(index='unique_group', columns='generation', values='trap_class')
+    holding = (tc == "good")
+    return holding.apply(lambda r: r[r].index.max() + 1 if r.any() else 0, axis=1)
 
 
 def trapped_clusters(d):

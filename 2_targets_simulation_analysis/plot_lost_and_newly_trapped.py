@@ -15,7 +15,7 @@ data_path = os.path.join(wandb_dir, "data", "trap_split_T1000_long", "merged_gro
 print(f"Loading data from {data_path}...")
 df = pd.read_parquet(data_path)
 df["social_fusion"] = df["social_fusion"].astype(str)
-df["frac_trapped"] = 1.0 - df["frac_on_good"]
+df["is_trapped"] = (df["trap_class"].astype(str) != "good").astype(float)
 
 FUSIONS = [
     "naive",
@@ -72,8 +72,8 @@ for col_idx, cond in enumerate(conditions):
         if len(d_sf) == 0:
             continue
 
-        # Percentage of trapped groups (on bad target or on neither) at each generation (1..1000)
-        trapped_series = 100.0 * d_sf.groupby("generation")["frac_trapped"].mean().reindex(range(n_gen), fill_value=0.0)
+        # Percentage of trapped groups (trap_class != "good") at each generation (1..1000)
+        trapped_series = 100.0 * d_sf.groupby("generation")["is_trapped"].mean().reindex(range(n_gen), fill_value=0.0)
         gens = trapped_series.index.values + 1
         raw_vals = trapped_series.values.astype(float)
         color = FUSION_COLORS[sf]
@@ -104,7 +104,7 @@ for col_idx, cond in enumerate(conditions):
             d_sf = sub[sub["social_fusion"] == sf]
             if len(d_sf) == 0:
                 continue
-            trapped_series = 100.0 * d_sf.groupby("generation")["frac_trapped"].mean().reindex(range(n_gen), fill_value=0.0)
+            trapped_series = 100.0 * d_sf.groupby("generation")["is_trapped"].mean().reindex(range(n_gen), fill_value=0.0)
             ax_ins.plot(trapped_series.index.values[:50] + 1, trapped_series.values[:50],
                         color=FUSION_COLORS[sf], linewidth=1.3)
         ax_ins.set_xlim(1, 50)

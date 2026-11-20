@@ -40,19 +40,23 @@ FUSION_COLORS = {
 }
 
 df = df[df["social_fusion"].isin(FUSIONS)].copy()
+df["trap_class"] = df["trap_class"].astype(str)
+df["final_class"] = df["final_class"].astype(str)
 
 # Per-generation change in group-mean private sensing probability:
 # d_prob_priv = w_priv(g) - w_priv(g - 1) (probability change per generation)
 df["d_prob_priv"] = df.groupby("unique_group")["prob_priv"].diff()
-df["prev_on_good"] = df.groupby("unique_group")["frac_on_good"].shift(1)
+df["prev_trap_class"] = df.groupby("unique_group")["trap_class"].shift(1)
 
 # Exclude the initial 25-generation transit phase where bad-start groups travel across the arena
-df = df[df["generation"] >= 25].dropna(subset=["d_prob_priv"]).copy()
+df = df[df["generation"] >= 25].dropna(subset=["d_prob_priv", "prev_trap_class"]).copy()
 
-# Split into regimes: currently on the good target vs. currently trapped (on bad target or lost)
+# Split into regimes using position-based trap_class in current and previous generation.
+# For Trapped, restrict to groups that actually end up trapped (final_class != "good") so escaping
+# groups recovering via private sensing are not mixed into the trapped regime.
 regimes = [
-    ("On good target", df[(df["frac_on_good"] > 0.5) & (df["prev_on_good"] > 0.5)]),
-    ("Trapped", df[(df["frac_on_good"] <= 0.5) & (df["prev_on_good"] <= 0.5)]),
+    ("On good target", df[(df["trap_class"] == "good") & (df["prev_trap_class"] == "good")]),
+    ("Trapped", df[(df["final_class"] != "good") & (df["trap_class"] != "good") & (df["prev_trap_class"] != "good")]),
 ]
 
 
@@ -95,7 +99,7 @@ for title, sub_df in regimes:
 
 # Use the canonical social fusion order across all figures
 ordered_fusions = FUSIONS
-ylim_abs = max(max_abs * 1.12, 0.52)
+ylim_abs = max(max_abs * 1.15, 0.28)
 
 fig, axes = plt.subplots(1, len(summaries), figsize=(9.8, 5.4), sharey=True)
 axes = np.atleast_1d(axes)

@@ -12,13 +12,13 @@ import wandb
 from scipy.special import softmax
 
 from dotenv import load_dotenv
+from trap_classification import TRAP_CLASSES, classify_window
 
 # 1. Load environment variables from .env if present
 load_dotenv()
 
 PROJECT = "chirkov/ssga_2_targets"
 
-TRAP_CLASSES = ["good", "bad", "lost"]  # status codes 0, 1, 2 in ssga_2_targets.py
 N_WORKERS = 8
 
 
@@ -64,13 +64,15 @@ def aggregate_agent_stats(artifact, tmp_root):
 
 def download_occupancy(run, tmp_root):
     """Per group: final trap class. Per group x generation: fraction of the generation's
-    trap blocks in which the group was on the good target, and on the bad target."""
+    trap blocks in which the group was on the good target, on the bad target, and its
+    trailing-window trap_class."""
     wandb_dir = os.environ.get("WANDB_DIR", ".")
     local_npz = sorted(glob.glob(os.path.join(wandb_dir, "artifacts", f"occupancy_{run.id}*", "*.npz")))
     if local_npz:
         d = np.load(local_npz[-1])
         final_class, status = d["final_class"], d["status"]
         blocks_per_gen = int(d["eval_interval"]) // int(d["trap_block"])
+        trap_window = int(d["trap_window"])
     else:
         artifacts = [a for a in run.logged_artifacts() if a.name.startswith(f"occupancy_{run.id}")]
         if not artifacts:
@@ -83,22 +85,38 @@ def download_occupancy(run, tmp_root):
             d = np.load(npz_path)
             final_class, status = d["final_class"], d["status"]
             blocks_per_gen = int(d["eval_interval"]) // int(d["trap_block"])
+            trap_window = int(d["trap_window"])
         finally:
             shutil.rmtree(download_dir, ignore_errors=True)
 
     n_blocks, n_groups = status.shape
-    per_gen_shape = (n_blocks // blocks_per_gen, blocks_per_gen, n_groups)
+    n_gens = n_blocks // blocks_per_gen
+    per_gen_shape = (n_gens, blocks_per_gen, n_groups)
     on_good = (status == 0).reshape(per_gen_shape).mean(1)  # [Gen, Groups]
     on_bad = (status == 1).reshape(per_gen_shape).mean(1)
+
+    # Trailing trap_window blocks at the end of each generation
+    gen_trap_cls = np.empty((n_gens, n_groups), dtype=np.int8)
+    for g in range(n_gens):
+        end_block = (g + 1) * blocks_per_gen
+        start_block = max(0, end_block - trap_window)
+        gen_trap_cls[g] = classify_window(status[start_block:end_block])
+
+    assert np.array_equal(gen_trap_cls[-1], final_class), (
+        f"Last-generation trap_class mismatch for run {run.id}: "
+        f"{(gen_trap_cls[-1] != final_class).sum()} groups differ"
+    )
+
     final = pd.DataFrame({
         "group_id": np.arange(n_groups),
         "final_class": pd.Categorical.from_codes(final_class, TRAP_CLASSES),
     })
     per_gen = pd.DataFrame({
-        "generation": np.repeat(np.arange(on_good.shape[0]), n_groups),
-        "group_id": np.tile(np.arange(n_groups), on_good.shape[0]),
+        "generation": np.repeat(np.arange(n_gens), n_groups),
+        "group_id": np.tile(np.arange(n_groups), n_gens),
         "frac_on_good": on_good.flatten().astype(np.float32),
         "frac_on_bad": on_bad.flatten().astype(np.float32),
+        "trap_class": pd.Categorical.from_codes(gen_trap_cls.flatten(), TRAP_CLASSES),
     })
     return final, per_gen
 
@@ -106,7 +124,7 @@ def download_occupancy(run, tmp_root):
 def process_run(run, per_run_dir, tmp_root):
     out_file = os.path.join(per_run_dir, f"{run.id}.parquet")
     cached = pd.read_parquet(out_file) if os.path.exists(out_file) else None
-    occupancy_cols = ["frac_on_good", "frac_on_bad"]
+    occupancy_cols = ["frac_on_good", "frac_on_bad", "trap_class"]
     if cached is not None and all(c in cached for c in occupancy_cols):
         print(f"  Already processed, loading {out_file}")
         return cached
