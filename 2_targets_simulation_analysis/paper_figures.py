@@ -1,14 +1,8 @@
-"""Paper figures 2 and 3 for every social fusion rule and run length.
-
-fig2: reward of every group, where groups are, and channel use of the worst trapped, the best trapped (if more than
-      N_CLUSTER groups are trapped) and the best groups.
-fig3 (bad start): A, flow of channel use of not-trapped and the worst trapped groups before and after they diverge;
-      B, where all groups spend their time and the flow of the worst and best trapped groups around trap onset.
-
-Data (per group x generation, T = 1000): download_trap_split_wandb_data.py
-  --max-ticks 200000 --eval-interval 1000   ->  200 generations
-  (defaults)                                 ->  1000 generations
-Figures go to figures/paper_figures/.
+"""Paper figures 2 and 3 (1000 generations):
+- Main text: Figure 2 and Figure 3 for naive merging.
+- Supplement: Combined Figure S2 and Figure S3 for ci_optimal_weight, firsthand,
+  flat_factor_merging_2, and flat_factor_merging_8.
+Only the best (max 100) and worst trapped (max 100) groups are shown everywhere.
 """
 import os
 import argparse
@@ -28,14 +22,25 @@ from dotenv import load_dotenv
 warnings.filterwarnings('ignore')
 load_dotenv()
 
-parser = argparse.ArgumentParser(description="Paper figures 2 and 3.")
+MAIN_FUSION = "naive"
+SUPP_FUSIONS = ["ci_optimal_weight", "firsthand", "flat_factor_merging_2", "flat_factor_merging_8"]
+
+FUSION_TITLES = {
+    "naive": "Naive merging",
+    "ci_optimal_weight": "Covariance intersection (optimal weight)",
+    "firsthand": "First-hand only",
+    "flat_factor_merging_2": r"Flat-factor merging ($\kappa = 2$)",
+    "flat_factor_merging_8": r"Flat-factor merging ($\kappa = 8$)",
+}
+
+parser = argparse.ArgumentParser(description="Paper figures 2 and 3 (1000 generations).")
 parser.add_argument(
     "--fusions",
     nargs="+",
-    default=["naive", "ci", "firsthand", "flat_factor_merging_2", "flat_factor_merging_8", "ci_optimal_weight"],
+    default=[MAIN_FUSION] + SUPP_FUSIONS,
 )
-parser.add_argument("--generations", nargs="+", type=int, default=[200, 1000])
-parser.add_argument("--figures", nargs="+", default=["fig2", "fig3"])
+parser.add_argument("--generations", nargs="+", type=int, default=[1000])
+parser.add_argument("--figures", nargs="+", default=["fig2", "fig3", "supp"])
 args = parser.parse_args()
 
 wandb_dir = os.environ.get("WANDB_DIR", "./")
@@ -57,12 +62,11 @@ TRAP_WINDOW = 20
 # average of the median reward is below TRAP_REWARD (0 = never left the bad target)
 ONSET_SMOOTH = 10
 
-# Clusters, ranked by mean median reward over the run: the worst N_CLUSTER trapped groups (all trapped groups if fewer),
-# the best N_CLUSTER trapped groups not among them (if more than N_CLUSTER are trapped) and the best N_CLUSTER groups
-# overall (fig. 2 only)
+# Clusters, ranked by mean median reward over the run: the worst N_CLUSTER trapped groups (all trapped groups if fewer)
+# and the best N_CLUSTER groups overall (fig. 2 only)
 N_CLUSTER = 100
-WORST_COLOR, BEST_TRAPPED_COLOR, BEST_COLOR = '#a3135f', '#2c7bb6', '#4d9221'
-CLUSTER_NAMES = {WORST_COLOR: "Worst trapped", BEST_TRAPPED_COLOR: "Best trapped", BEST_COLOR: f"Best {N_CLUSTER}"}
+WORST_COLOR, BEST_COLOR = '#a3135f', '#4d9221'
+CLUSTER_NAMES = {WORST_COLOR: "Worst trapped", BEST_COLOR: f"Best {N_CLUSTER}"}
 
 # Fig. 3
 PANEL_A_END = 100       # panel A: generations 1-divergence and divergence-PANEL_A_END
@@ -72,15 +76,13 @@ FLOW_DENSITY_SCALE = 0.3   # streamline density = scale / sqrt(share of the tria
 FLOW_MIN_SHARE = 0.02     # fig. 3: draw the flow only where at least this share of the set's groups pass
 MIN_CLUSTER_GROUPS = 3
 
-# File names sort as 200 then 1000 generations, and naive -> ci -> first-hand -> flat-factor -> ci_optimal_weight
 GEN_ORDER = {200: 1, 1000: 2}
 FUSION_ORDER = {
     "naive": 1,
-    "ci": 2,
+    "ci_optimal_weight": 2,
     "firsthand": 3,
     "flat_factor_merging_2": 4,
     "flat_factor_merging_8": 5,
-    "ci_optimal_weight": 6,
 }
 
 STARTS = [(0, "Good start"), (1, "Bad start")]
@@ -130,16 +132,11 @@ def trap_onset(d):
 
 
 def trapped_clusters(d):
-    """Trapped groups by mean median reward as (label, colour, groups): the worst N_CLUSTER and the best N_CLUSTER
-    not among them."""
+    """Worst N_CLUSTER trapped groups by mean median reward (all trapped groups if fewer)."""
     perf = d[d['outcome'] == "Trapped"].groupby('unique_group')[PERF_COL].mean().sort_values()
     n = len(perf)
     n_worst = min(N_CLUSTER, n)
-    clusters = [(f"Worst {n_worst} trapped", WORST_COLOR, perf.index[:n_worst])]
-    n_best = min(N_CLUSTER, n - n_worst)
-    if n_best > 0:
-        clusters.append((f"Best {n_best} trapped", BEST_TRAPPED_COLOR, perf.index[n - n_best:]))
-    return clusters
+    return [(f"Worst {n_worst} trapped", WORST_COLOR, perf.index[:n_worst])]
 
 
 def divergence_generation(a, b):
@@ -241,7 +238,8 @@ def draw_flow(ax, phase, cmap, res=50):
 
 
 def ordered_name(figure, fusion, n_gen):
-    return f"{figure}_{GEN_ORDER[n_gen]}_{n_gen}gen_{FUSION_ORDER[fusion]}_{fusion}"
+    order_idx = FUSION_ORDER.get(fusion, 9)
+    return f"{figure}_{GEN_ORDER[n_gen]}_{n_gen}gen_{order_idx}_{fusion}"
 
 
 def save(fig, name):
@@ -254,36 +252,35 @@ def save(fig, name):
 
 # ---------------------------------------------------------------------------------------------
 # Fig. 2: rows = start; A reward of every group, B where groups are,
-# C-E channel use of the worst trapped, the best trapped and the best groups
+# C-E channel use of the worst trapped (max 100) and the best (max 100) groups
 # ---------------------------------------------------------------------------------------------
 def perf_clusters(d):
     """Groups ordered for the heatmap (trapped first, each block by mean median reward, ascending), and the
-    clusters as (label, colour, groups): the worst and best trapped groups and the best groups."""
+    clusters as (label, colour, groups): the worst trapped groups (max 100) and the best 100 groups."""
     info = d.groupby('unique_group').agg(mean_perf=(PERF_COL, 'mean'), outcome=('outcome', 'first'))
     info = info.iloc[np.lexsort((info['mean_perf'].values, info['outcome'].values != "Trapped"))]
     clusters = trapped_clusters(d) + [(f"Best {N_CLUSTER}", BEST_COLOR, info['mean_perf'].nlargest(N_CLUSTER).index)]
     return info.index, clusters
 
 
-def fig2(df, fusion, n_gen, perf_range):
-    fig = plt.figure(figsize=(19, 6.2))
-    gs = gridspec.GridSpec(2, 5, width_ratios=[1.5, 1, 1, 1, 1], hspace=0.12, wspace=0.25)
+def draw_fig2_block(fig, gs_block, df, fusion, n_gen, perf_range, shown, show_col_titles=True, show_letters=True,
+                    show_xlabel=True, show_colorbar=True, block_title=None):
     titles = ["Group reward", "Group location"] + [label for _, label in CHANNELS]
-    shown = set()  # colours of the clusters drawn in any row
+    image = None
+    ax_h_last = None
     for r, (cond, start) in enumerate(STARTS):
         d = df[(df['social_fusion'] == fusion) & (df['close_target_index'] == cond)]
         order, clusters = perf_clusters(d)
-        last = r == len(STARTS) - 1
-        axes = [fig.add_subplot(gs[r, c]) for c in range(5)]
+        last = (r == len(STARTS) - 1)
+        axes = [fig.add_subplot(gs_block[r, c]) for c in range(5)]
 
         ax_h = axes[0]
+        ax_h_last = ax_h
         heat = d.pivot(index='unique_group', columns='generation', values=PERF_COL).reindex(order)
         image = ax_h.imshow(heat, aspect='auto', cmap=perf_cmap, vmin=perf_range[0], vmax=perf_range[1],
                             interpolation='none', extent=[1, n_gen, 0, len(heat)], origin='lower', rasterized=True)
         box = dict(facecolor='white', alpha=0.85, edgecolor='none', pad=1.2)
         row = pd.Series(np.arange(len(heat)), index=heat.index)
-        # Each cluster is a contiguous block of rows: worst trapped at the bottom, best trapped at the top of the
-        # trapped block, best groups at the top
         for label, color, groups in clusters:
             if len(groups) == 0:
                 continue
@@ -295,7 +292,7 @@ def fig2(df, fusion, n_gen, perf_range):
                       weight='bold', bbox=box)
         ax_h.set_yticks([])
         ax_h.set_ylabel(f"{start}\n\nGroups")
-        gen_axis(ax_h, n_gen, label=last)
+        gen_axis(ax_h, n_gen, label=(last and show_xlabel))
 
         ax_s = axes[1]
         shares = d.groupby('generation')[['frac_on_good', 'frac_on_bad']].mean()
@@ -304,7 +301,7 @@ def fig2(df, fusion, n_gen, perf_range):
                        colors=[STATE_COLORS[k] for k in ['good', 'lost', 'bad']], linewidth=0)
         ax_s.set_ylim(0, 1)
         ax_s.set_ylabel("Share of groups")
-        gen_axis(ax_s, n_gen, label=last)
+        gen_axis(ax_s, n_gen, label=(last and show_xlabel))
 
         for ax, (col, _) in zip(axes[2:], CHANNELS):
             for _, color, groups in clusters:
@@ -313,30 +310,81 @@ def fig2(df, fusion, n_gen, perf_range):
                     shown.add(color)
             ax.set_ylim(0, 0.5 if col == 'prob_priv' else 1)
             ax.grid(True, alpha=0.3)
-            gen_axis(ax, n_gen, label=last)
+            gen_axis(ax, n_gen, label=(last and show_xlabel))
         axes[2].set_ylabel("Probability")
 
         if r == 0:
-            for c_idx, a in enumerate(axes):
-                a.set_title(titles[c_idx], fontsize=12)
-                panel_letter(a, 'ABCDE'[c_idx])
-        if last:
-            cax = ax_h.inset_axes([0.0, -0.3, 1.0, 0.045])
-            cb = fig.colorbar(image, cax=cax, orientation='horizontal')
-            cb.set_label("Median reward", fontsize=9, labelpad=1)
-            cb.ax.tick_params(labelsize=8)
+            if show_col_titles:
+                for c_idx, a in enumerate(axes):
+                    a.set_title(titles[c_idx], fontsize=12)
+            if show_letters:
+                for c_idx, a in enumerate(axes):
+                    panel_letter(a, 'ABCDE'[c_idx])
+            if block_title is not None:
+                ax_h.text(0.0, 1.18 if show_col_titles else 1.08, block_title, transform=ax_h.transAxes,
+                          fontsize=13, weight='bold', va='bottom', ha='left')
 
+    if show_colorbar and ax_h_last is not None and image is not None:
+        cax = ax_h_last.inset_axes([0.0, -0.32, 1.0, 0.045])
+        cb = fig.colorbar(image, cax=cax, orientation='horizontal')
+        cb.set_label("Median reward", fontsize=9, labelpad=1)
+        cb.ax.tick_params(labelsize=8)
+    return ax_h_last
+
+
+def fig2(df, fusion, n_gen, perf_range):
+    fig = plt.figure(figsize=(19, 6.2))
+    gs = gridspec.GridSpec(2, 5, width_ratios=[1.5, 1, 1, 1, 1], hspace=0.12, wspace=0.25)
+    shown = set()
+    draw_fig2_block(fig, gs, df, fusion, n_gen, perf_range, shown,
+                    show_col_titles=True, show_letters=True, show_xlabel=True, show_colorbar=True)
     handles = [Patch(facecolor=STATE_COLORS[k], label=STATE_LABELS[k]) for k in ['good', 'lost', 'bad']]
     handles += [Line2D([0], [0], color=c, linewidth=2.5, label=CLUSTER_NAMES[c])
-                for c in [WORST_COLOR, BEST_TRAPPED_COLOR, BEST_COLOR] if c in shown]
+                for c in [WORST_COLOR, BEST_COLOR] if c in shown]
     fig.legend(handles=handles, loc='upper center', ncol=len(handles), frameon=False, bbox_to_anchor=(0.62, 0.035),
                fontsize=9.5, handlelength=1.6, columnspacing=1.2, handletextpad=0.5)
     save(fig, ordered_name("fig2", fusion, n_gen))
 
 
+def fig2_supp(df, fusions, n_gen, perf_range):
+    """Combined supplementary Figure 2 for all supplementary fusion rules."""
+    n_blocks = len(fusions)
+    fig = plt.figure(figsize=(19, 5.4 * n_blocks))
+    outer = gridspec.GridSpec(n_blocks, 1, hspace=0.26, bottom=0.04, top=0.96)
+    shown = set()
+    ax_h_bottom = None
+    for idx, fusion in enumerate(fusions):
+        inner = gridspec.GridSpecFromSubplotSpec(
+            2, 5, subplot_spec=outer[idx], width_ratios=[1.5, 1, 1, 1, 1], hspace=0.12, wspace=0.25
+        )
+        is_last = (idx == n_blocks - 1)
+        letter = 'ABCD'[idx]
+        block_title = f"{letter}   {FUSION_TITLES.get(fusion, fusion)}"
+        ax_h_Bottom_cand = draw_fig2_block(
+            fig, inner, df, fusion, n_gen, perf_range, shown,
+            show_col_titles=True,
+            show_letters=False,
+            show_xlabel=is_last,
+            show_colorbar=is_last,
+            block_title=block_title,
+        )
+        if is_last:
+            ax_h_bottom = ax_h_Bottom_cand
+
+    handles = [Patch(facecolor=STATE_COLORS[k], label=STATE_LABELS[k]) for k in ['good', 'lost', 'bad']]
+    handles += [Line2D([0], [0], color=c, linewidth=2.5, label=CLUSTER_NAMES[c])
+                for c in [WORST_COLOR, BEST_COLOR] if c in shown]
+    # Align legend vertically with the colorbar right below the bottom block's x-axis labels
+    pos = ax_h_bottom.get_position()
+    leg_y = pos.y0 - 0.27 * pos.height
+    fig.legend(handles=handles, loc='upper center', ncol=len(handles), frameon=False, bbox_to_anchor=(0.62, leg_y),
+               fontsize=10.5, handlelength=1.6, columnspacing=1.2, handletextpad=0.5)
+    save(fig, f"fig2_supp_{n_gen}gen")
+
+
 # ---------------------------------------------------------------------------------------------
-# Fig. 3 (bad start). A: flow of not-trapped and the worst trapped groups before and after they diverge.
-# B: where all groups spend their time, and the flow of the worst and best trapped groups around trap onset.
+# Fig. 3 (bad start). A: flow of not-trapped and the worst trapped (max 100) groups before and after they diverge.
+# B: where all groups spend their time, and the flow of the worst trapped (max 100) groups around trap onset.
 # ---------------------------------------------------------------------------------------------
 def cohort_flow(ax, sub, color, tri, res=36):
     """Flow field of one cluster, drawn in a single colour wherever at least FLOW_MIN_SHARE of the cluster's
@@ -361,23 +409,22 @@ def cohort_flow(ax, sub, color, tri, res=36):
         return False
 
 
-def fig3(df, fusion, n_gen, cond=1):
+def draw_fig3_block(fig, outer_spec, df, fusion, n_gen, cond=1, block_title=None, show_panel_letters=True):
     d = with_steps(df[(df['social_fusion'] == fusion) & (df['close_target_index'] == cond)])
     clusters = trapped_clusters(d)
     free, worst = d[d['outcome'] == "Not trapped"], d[d['unique_group'].isin(clusters[0][2])]
     if len(clusters[0][2]) == 0 or len(free) == 0:
         print(f"  {fusion} {n_gen} gen: only one outcome, skipping fig3")
-        return
+        return False
     rows = [("Not trapped", FREE_COLOR, FREE_CMAP, free), (CLUSTER_NAMES[WORST_COLOR], WORST_COLOR, WORST_CMAP, worst)]
     div_gen = divergence_generation(free, worst)
     onset = trap_onset(d).clip(upper=n_gen - 1)
     a_end = PANEL_A_END if div_gen < PANEL_A_END else n_gen
 
-    fig = plt.figure(figsize=(15, 7.2))
-    outer = gridspec.GridSpec(1, 2, width_ratios=[1, 1.15], wspace=0.08)
+    block_gs = gridspec.GridSpecFromSubplotSpec(1, 2, subplot_spec=outer_spec, width_ratios=[1, 1.15], wspace=0.08)
 
     # A: rows = not trapped / worst trapped, columns = before / after divergence
-    inner = gridspec.GridSpecFromSubplotSpec(2, 2, subplot_spec=outer[0], hspace=0.12, wspace=0.12)
+    inner = gridspec.GridSpecFromSubplotSpec(2, 2, subplot_spec=block_gs[0], hspace=0.12, wspace=0.12)
     periods = [(f"Gen 1–{div_gen + 1}", d['generation'] <= div_gen),
                (f"Gen {div_gen + 1}–{a_end}", (d['generation'] >= div_gen) & (d['generation'] < a_end))]
     for i, (label, color, cmap, sub) in enumerate(rows):
@@ -391,11 +438,14 @@ def fig3(df, fusion, n_gen, cond=1):
                 ax.text(-0.14, H / 2, f"{label} ({n})",
                         rotation=90, ha='center', va='center', fontsize=11, color=color, weight='bold')
             if i == 0 and j == 0:
-                ax.text(-0.2, H + 0.25, "A", fontsize=15, weight='bold')
+                if show_panel_letters:
+                    ax.text(-0.2, H + 0.25, "A", fontsize=15, weight='bold')
+                if block_title is not None:
+                    ax.text(-0.2, H + 0.28, block_title, fontsize=13, weight='bold', ha='left', va='bottom')
 
-    # B: time spent by all groups, and the flow of trapped groups around their onset, one colour per cluster
-    ax_b = fig.add_subplot(outer[1])
-    tri = ternary_frame(ax_b, fontsize=12)
+    # B: time spent by all groups, and the flow of worst trapped groups around their onset
+    ax_b = fig.add_subplot(block_gs[1])
+    tri = ternary_frame(ax_b, fontsize=11)
     xb = np.linspace(-0.05, 1.05, 60)
     yb = np.linspace(-0.05, H + 0.05, 60)
     occ = gaussian_filter(binned_statistic_2d(d['mx'], d['my'], d['mx'], 'count', bins=[xb, yb])[0].T, 1.0)
@@ -417,18 +467,48 @@ def fig3(df, fusion, n_gen, cond=1):
     ax_b.legend(handles=handles, loc='upper right', frameon=False, fontsize=9.5,
                 title=f"Trapped, gen −{ONSET_SPAN[0]} to +{ONSET_SPAN[1]}\naround trap onset",
                 title_fontsize=10, bbox_to_anchor=(1.04, 1.0))
-    ax_b.text(-0.08, H + 0.06, "B", fontsize=15, weight='bold')
+    if show_panel_letters:
+        ax_b.text(-0.08, H + 0.06, "B", fontsize=15, weight='bold')
     cax = ax_b.inset_axes([0.05, 0.62, 0.025, 0.3])
     cb = fig.colorbar(im, cax=cax)
     cb.set_label("Time spent, all groups", fontsize=9)
     cb.ax.tick_params(labelsize=8)
+    return True
 
+
+def fig3(df, fusion, n_gen, cond=1):
+    fig = plt.figure(figsize=(15, 7.2))
+    outer = gridspec.GridSpec(1, 1)
+    ok = draw_fig3_block(fig, outer[0], df, fusion, n_gen, cond=cond, block_title=None, show_panel_letters=True)
+    if not ok:
+        plt.close(fig)
+        return
     leg = [Patch(facecolor=plt.get_cmap(FREE_CMAP)(0.6), label="Not trapped"),
-           Patch(facecolor=plt.get_cmap(WORST_CMAP)(0.6), label=CLUSTER_NAMES[WORST_COLOR])]
-    leg += [Line2D([0], [0], color='black', linewidth=1.2, label='Flow')]
+           Patch(facecolor=plt.get_cmap(WORST_CMAP)(0.6), label=CLUSTER_NAMES[WORST_COLOR]),
+           Line2D([0], [0], color='black', linewidth=1.2, label='Flow')]
     fig.legend(handles=leg, loc='upper center', ncol=3, frameon=False, bbox_to_anchor=(0.29, 0.13), fontsize=9.5,
                handlelength=1.6, columnspacing=1.2, handletextpad=0.5)
     save(fig, ordered_name("fig3", fusion, n_gen))
+
+
+def fig3_supp(df, fusions, n_gen, cond=1):
+    """Combined supplementary Figure 3 (2x2 grid of the 4 supplementary fusion conditions)."""
+    fig = plt.figure(figsize=(24, 13.0))
+    outer = gridspec.GridSpec(2, 2, hspace=0.16, wspace=0.12, bottom=0.06, top=0.94)
+    for idx, fusion in enumerate(fusions):
+        r, c = divmod(idx, 2)
+        letter = 'ABCD'[idx]
+        block_title = f"{letter}   {FUSION_TITLES.get(fusion, fusion)}"
+        draw_fig3_block(
+            fig, outer[r, c], df, fusion, n_gen, cond=cond,
+            block_title=block_title, show_panel_letters=False,
+        )
+    leg = [Patch(facecolor=plt.get_cmap(FREE_CMAP)(0.6), label="Not trapped"),
+           Patch(facecolor=plt.get_cmap(WORST_CMAP)(0.6), label=CLUSTER_NAMES[WORST_COLOR]),
+           Line2D([0], [0], color='black', linewidth=1.2, label='Flow')]
+    fig.legend(handles=leg, loc='upper center', ncol=3, frameon=False, bbox_to_anchor=(0.5, 0.075), fontsize=11,
+               handlelength=1.6, columnspacing=1.5, handletextpad=0.5)
+    save(fig, f"fig3_supp_{n_gen}gen")
 
 
 for n_gen in args.generations:
@@ -439,4 +519,9 @@ for n_gen in args.generations:
             fig2(df, fusion, n_gen, perf_range)
         if "fig3" in args.figures:
             fig3(df, fusion, n_gen)
+    if "supp" in args.figures:
+        supp_present = [f for f in SUPP_FUSIONS if f in df['social_fusion'].unique()]
+        if supp_present:
+            fig2_supp(df, supp_present, n_gen, perf_range)
+            fig3_supp(df, supp_present, n_gen)
 print("Done.")
